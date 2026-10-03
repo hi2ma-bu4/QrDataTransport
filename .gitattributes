@@ -1,0 +1,14 @@
+# フォルダ群
+**/dist/**          merge=theirs
+
+# 通常テキスト
+*.txt   text    eol=lf
+
+# 本体コード
+*.js    text    eol=lf
+*.js.map text   eol=lf  merge=theirs
+*.mjs   text    eol=lf
+*.ts    text    eol=lf
+*.d.ts  text    eol=lf  merge=theirs
+*.html  text    eol=lf  merge=theirs
+*.css   text    eol=lf
