@@ -9,11 +9,17 @@
 			"bindgen",
 			"bitflags",
 			"bitstream",
+			"CCITT",
 			"cdylib",
 			"HDLC",
 			"qrcodegen",
+			"refin",
+			"refout",
 			"rxing",
-			"thiserror"
+			"thiserror",
+			"varint",
+			"varints",
+			"xorout"
 		],
 		"rust-analyzer.linkedProjects": [
 			"${workspaceFolder}/wasm/protocol/Cargo.toml"

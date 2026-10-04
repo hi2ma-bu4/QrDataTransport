@@ -19,6 +19,7 @@
     "skipLibCheck": true,
     "incremental": true,
     "rootDir": "./src",
+    "tsBuildInfoFile": "./.cache/tsbuildinfo.json"
   },
   "include": [
     "src/**/*"

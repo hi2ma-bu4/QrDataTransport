@@ -44,7 +44,7 @@ pub mod exports {
                     _rt::cabi_dealloc(base2, len2 * 1, 1);
                 }
                 pub trait Guest {
-                    /// [仮定義] これは型定義サンプルです。実際のデータ構造に合わせて変更してください。
+                    /// [仮定義] これは型定義サンプルです。実際のデータ構造に合わせて変更してください。そのまま使用してはいけません。
                     fn decode(data: _rt::Vec<u8>) -> _rt::Vec<u8>;
                 }
                 #[doc(hidden)]
