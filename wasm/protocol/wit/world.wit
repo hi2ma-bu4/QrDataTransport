@@ -1,7 +1,7 @@
 package snows:qr-data-transport;
 
 interface protocol {
-    // [仮定義] これは型定義サンプルです。実際のデータ構造に合わせて変更してください。
+    // [仮定義] これは型定義サンプルです。実際のデータ構造に合わせて変更してください。そのまま使用してはいけません。
     decode: func(data: list<u8>) -> list<u8>;
 }
 
