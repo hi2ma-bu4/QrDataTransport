@@ -3,6 +3,7 @@ mod bindings;
 
 pub mod bit_stream;
 pub mod crc;
+pub mod encoder;
 pub mod frame;
 pub mod varint;
 
