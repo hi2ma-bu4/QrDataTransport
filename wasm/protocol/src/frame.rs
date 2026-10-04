@@ -66,6 +66,21 @@ pub enum FrameError {
         specified: usize,
         buffer_bits: usize,
     },
+
+    #[error("Frame set is empty")]
+    EmptyFrames,
+
+    #[error("Incomplete frame set: expected {expected} frames, got {actual}")]
+    IncompleteFrameSet { expected: u32, actual: usize },
+
+    #[error("Duplicate frame number {0}")]
+    DuplicateFrameNumber(u32),
+
+    #[error("Missing frame number {0}")]
+    MissingFrameNumber(u32),
+
+    #[error("Mismatched Total QR Count in frame set: expected {expected}, got {actual}")]
+    MismatchedTotalQrCount { expected: u32, actual: u32 },
 }
 
 /// Context passed when decoding a Non-First Frame.
@@ -498,6 +513,102 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
     }
 }
 
+/// Concatenates the payloads of a complete set of Frames in frame_number order (0..N-1).
+///
+/// Validates that all frames from 0 to Total QR Count - 1 are present with no duplicates or missing frames,
+/// and that total_qr_count matches across all frames.
+pub fn concat_payload_bits(frames: &[Frame]) -> Result<BitWriter, FrameError> {
+    if frames.is_empty() {
+        return Err(FrameError::EmptyFrames);
+    }
+
+    let expected_total = frames[0].total_qr_count();
+    if expected_total < 1 || expected_total > 65536 {
+        return Err(FrameError::InvalidTotalQrCount(expected_total));
+    }
+
+    if frames.len() != expected_total as usize {
+        return Err(FrameError::IncompleteFrameSet {
+            expected: expected_total,
+            actual: frames.len(),
+        });
+    }
+
+    for frame in frames {
+        if frame.total_qr_count() != expected_total {
+            return Err(FrameError::MismatchedTotalQrCount {
+                expected: expected_total,
+                actual: frame.total_qr_count(),
+            });
+        }
+        if frame.frame_number() >= expected_total {
+            return Err(FrameError::InvalidFrameNumber {
+                frame_number: frame.frame_number(),
+                total_qr_count: expected_total,
+            });
+        }
+    }
+
+    let mut sorted_frames: Vec<&Frame> = frames.iter().collect();
+    sorted_frames.sort_by_key(|f| f.frame_number());
+
+    for (i, frame) in sorted_frames.iter().enumerate() {
+        let expected_fn = i as u32;
+        let actual_fn = frame.frame_number();
+        if actual_fn != expected_fn {
+            if actual_fn < expected_fn {
+                return Err(FrameError::DuplicateFrameNumber(actual_fn));
+            } else {
+                return Err(FrameError::MissingFrameNumber(expected_fn));
+            }
+        }
+    }
+
+    let total_bit_len: usize = sorted_frames.iter().map(|f| f.payload_bit_len()).sum();
+    let mut writer = BitWriter::with_capacity_bits(total_bit_len);
+
+    for frame in sorted_frames {
+        let p_len = frame.payload_bit_len();
+        let p_bytes = frame.payload_bytes();
+        if p_len > p_bytes.len() * 8 {
+            return Err(FrameError::InvalidPayloadLength {
+                specified: p_len,
+                buffer_bits: p_bytes.len() * 8,
+            });
+        }
+        writer.write_bytes(p_bytes, p_len)?;
+    }
+
+    Ok(writer)
+}
+
+/// Calculates the Overall CRC (CRC-32/ISO-HDLC) across all payloads in a complete Frame set.
+pub fn calculate_overall_crc(frames: &[Frame]) -> Result<u32, FrameError> {
+    let writer = concat_payload_bits(frames)?;
+    Ok(crate::crc::crc32_bits(writer.as_bytes(), writer.bit_len()))
+}
+
+/// Verifies that the calculated Overall CRC matches the Overall CRC stored in the Final QR.
+///
+/// Returns Ok(true) if CRC matches, Ok(false) if mismatch.
+pub fn verify_overall_crc(frames: &[Frame]) -> Result<bool, FrameError> {
+    let calculated = calculate_overall_crc(frames)?;
+
+    let final_frame =
+        frames
+            .iter()
+            .find(|f| f.is_final())
+            .ok_or(FrameError::MissingFrameNumber(
+                frames[0].total_qr_count() - 1,
+            ))?;
+
+    let wire_overall_crc = final_frame
+        .overall_crc()
+        .ok_or(FrameError::MissingOverallCrc)?;
+
+    Ok(calculated == wire_overall_crc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -845,5 +956,441 @@ mod tests {
         let decoded = decode_frame(&encoded, None).unwrap();
         assert_eq!(decoded.payload_bytes(), &[0x12]);
         assert_eq!(decoded.overall_crc(), Some(0x12345678));
+    }
+
+    #[test]
+    fn test_overall_crc_single_frame() {
+        let payload = b"Hello, World!";
+        let expected_crc = crate::crc::crc32(payload);
+
+        let frame = Frame::First {
+            version: 1,
+            total_qr_count: 1,
+            frame_number: 0,
+            data_type: DataType::Uint8Array,
+            payload_bytes: payload.to_vec(),
+            payload_bit_len: payload.len() * 8,
+            frame_crc: 0x1234,
+            overall_crc: Some(expected_crc),
+        };
+
+        let calculated = calculate_overall_crc(&[frame.clone()]).unwrap();
+        assert_eq!(calculated, expected_crc);
+
+        let verified = verify_overall_crc(&[frame]).unwrap();
+        assert!(verified);
+    }
+
+    #[test]
+    fn test_overall_crc_multiple_frames() {
+        let p0 = b"Hello, ";
+        let p1 = b"World";
+        let p2 = b"!";
+
+        let combined = b"Hello, World!";
+        let expected_crc = crate::crc::crc32(combined);
+
+        let frame0 = Frame::First {
+            version: 1,
+            total_qr_count: 3,
+            frame_number: 0,
+            data_type: DataType::Uint8Array,
+            payload_bytes: p0.to_vec(),
+            payload_bit_len: p0.len() * 8,
+            frame_crc: 0x1111,
+            overall_crc: None,
+        };
+
+        let frame1 = Frame::NonFirst {
+            total_qr_count: 3,
+            frame_number: 1,
+            payload_bytes: p1.to_vec(),
+            payload_bit_len: p1.len() * 8,
+            frame_crc: 0x2222,
+            overall_crc: None,
+        };
+
+        let frame2 = Frame::NonFirst {
+            total_qr_count: 3,
+            frame_number: 2,
+            payload_bytes: p2.to_vec(),
+            payload_bit_len: p2.len() * 8,
+            frame_crc: 0x3333,
+            overall_crc: Some(expected_crc),
+        };
+
+        let frames = vec![frame0, frame1, frame2];
+        let calculated = calculate_overall_crc(&frames).unwrap();
+        assert_eq!(calculated, expected_crc);
+
+        let verified = verify_overall_crc(&frames).unwrap();
+        assert!(verified);
+    }
+
+    #[test]
+    fn test_overall_crc_unaligned_frame_boundaries_13_plus_11() {
+        // 24 bits total: 0xD2, 0xAF, 0x55
+        // Frame 0: 13 bits -> top 13 bits: 0xD2 (8b) + 0xA8 (top 5b of 0xAF: 10101xxx)
+        // Frame 1: 11 bits -> lower 11 bits: bottom 3b of 0xAF (111xxx) + 0x55 (8b) -> 11101010 101xxxxx (0xEA, 0xA0)
+        let total_payload = [0xD2, 0xAF, 0x55];
+        let expected_crc = crate::crc::crc32(&total_payload);
+
+        let frame0_payload = vec![0xD2, 0xA8]; // 13 bits
+        let frame1_payload = vec![0xEA, 0xA0]; // 11 bits (3 bits + 8 bits = 11 bits)
+
+        let frame0 = Frame::First {
+            version: 1,
+            total_qr_count: 2,
+            frame_number: 0,
+            data_type: DataType::Uint8Array,
+            payload_bytes: frame0_payload,
+            payload_bit_len: 13,
+            frame_crc: 0x1000,
+            overall_crc: None,
+        };
+
+        let frame1 = Frame::NonFirst {
+            total_qr_count: 2,
+            frame_number: 1,
+            payload_bytes: frame1_payload,
+            payload_bit_len: 11,
+            frame_crc: 0x2000,
+            overall_crc: Some(expected_crc),
+        };
+
+        let frames = vec![frame0, frame1];
+        let concatenated = concat_payload_bits(&frames).unwrap();
+        assert_eq!(concatenated.bit_len(), 24);
+        assert_eq!(concatenated.as_bytes(), &total_payload);
+
+        let calculated = calculate_overall_crc(&frames).unwrap();
+        assert_eq!(calculated, expected_crc);
+        assert!(verify_overall_crc(&frames).unwrap());
+    }
+
+    #[test]
+    fn test_overall_crc_individual_zero_bit_payload() {
+        let p0 = b"Hello";
+        let p2 = b"World";
+
+        let combined = b"HelloWorld";
+        let expected_crc = crate::crc::crc32(combined);
+
+        let frame0 = Frame::First {
+            version: 1,
+            total_qr_count: 3,
+            frame_number: 0,
+            data_type: DataType::Uint8Array,
+            payload_bytes: p0.to_vec(),
+            payload_bit_len: p0.len() * 8,
+            frame_crc: 0x1111,
+            overall_crc: None,
+        };
+
+        // Frame 1 has 0 bits payload
+        let frame1 = Frame::NonFirst {
+            total_qr_count: 3,
+            frame_number: 1,
+            payload_bytes: vec![],
+            payload_bit_len: 0,
+            frame_crc: 0x2222,
+            overall_crc: None,
+        };
+
+        let frame2 = Frame::NonFirst {
+            total_qr_count: 3,
+            frame_number: 2,
+            payload_bytes: p2.to_vec(),
+            payload_bit_len: p2.len() * 8,
+            frame_crc: 0x3333,
+            overall_crc: Some(expected_crc),
+        };
+
+        let frames = vec![frame0, frame1, frame2];
+        let calculated = calculate_overall_crc(&frames).unwrap();
+        assert_eq!(calculated, expected_crc);
+        assert!(verify_overall_crc(&frames).unwrap());
+    }
+
+    #[test]
+    fn test_overall_crc_total_payload_zero_bits() {
+        let expected_crc = crate::crc::crc32_bits(&[], 0); // 0x00000000
+
+        let frame0 = Frame::First {
+            version: 1,
+            total_qr_count: 2,
+            frame_number: 0,
+            data_type: DataType::Uint8Array,
+            payload_bytes: vec![],
+            payload_bit_len: 0,
+            frame_crc: 0x1111,
+            overall_crc: None,
+        };
+
+        let frame1 = Frame::NonFirst {
+            total_qr_count: 2,
+            frame_number: 1,
+            payload_bytes: vec![],
+            payload_bit_len: 0,
+            frame_crc: 0x2222,
+            overall_crc: Some(expected_crc),
+        };
+
+        let frames = vec![frame0, frame1];
+        let calculated = calculate_overall_crc(&frames).unwrap();
+        assert_eq!(calculated, 0x00000000);
+        assert!(verify_overall_crc(&frames).unwrap());
+    }
+
+    #[test]
+    fn test_overall_crc_out_of_order_input() {
+        let combined = b"SortedBits";
+        let expected_crc = crate::crc::crc32(combined);
+
+        let frame0 = Frame::First {
+            version: 1,
+            total_qr_count: 3,
+            frame_number: 0,
+            data_type: DataType::Uint8Array,
+            payload_bytes: b"Sor".to_vec(),
+            payload_bit_len: 24,
+            frame_crc: 0x1000,
+            overall_crc: None,
+        };
+
+        let frame1 = Frame::NonFirst {
+            total_qr_count: 3,
+            frame_number: 1,
+            payload_bytes: b"ted".to_vec(),
+            payload_bit_len: 24,
+            frame_crc: 0x2000,
+            overall_crc: None,
+        };
+
+        let frame2 = Frame::NonFirst {
+            total_qr_count: 3,
+            frame_number: 2,
+            payload_bytes: b"Bits".to_vec(),
+            payload_bit_len: 32,
+            frame_crc: 0x3000,
+            overall_crc: Some(expected_crc),
+        };
+
+        // Pass out of order: [frame2, frame0, frame1]
+        let out_of_order = vec![frame2.clone(), frame0.clone(), frame1.clone()];
+        let in_order = vec![frame0, frame1, frame2];
+
+        assert_eq!(
+            calculate_overall_crc(&out_of_order).unwrap(),
+            calculate_overall_crc(&in_order).unwrap()
+        );
+        assert!(verify_overall_crc(&out_of_order).unwrap());
+    }
+
+    #[test]
+    fn test_overall_crc_ignore_trailing_unused_bits_in_payload() {
+        // Frame 0 has payload_bit_len = 5, but payload_bytes contains 0b11010111 (noise in lower 3 bits)
+        // Frame 1 has payload_bit_len = 3, payload_bytes contains 0b10111111 (noise in lower 5 bits)
+        // Total payload = 8 bits: 5 bits (11010) + 3 bits (101) = 0b11010101 (0xD5)
+        let expected_crc = crate::crc::crc32(&[0xD5]);
+
+        let frame0 = Frame::First {
+            version: 1,
+            total_qr_count: 2,
+            frame_number: 0,
+            data_type: DataType::Uint8Array,
+            payload_bytes: vec![0b11010111], // top 5 bits: 11010
+            payload_bit_len: 5,
+            frame_crc: 0x1000,
+            overall_crc: None,
+        };
+
+        let frame1 = Frame::NonFirst {
+            total_qr_count: 2,
+            frame_number: 1,
+            payload_bytes: vec![0b10111111], // top 3 bits: 101
+            payload_bit_len: 3,
+            frame_crc: 0x2000,
+            overall_crc: Some(expected_crc),
+        };
+
+        let frames = vec![frame0, frame1];
+        let concatenated = concat_payload_bits(&frames).unwrap();
+        assert_eq!(concatenated.bit_len(), 8);
+        assert_eq!(concatenated.as_bytes(), &[0xD5]);
+
+        let calculated = calculate_overall_crc(&frames).unwrap();
+        assert_eq!(calculated, expected_crc);
+        assert!(verify_overall_crc(&frames).unwrap());
+    }
+
+    #[test]
+    fn test_overall_crc_boundary_invariance() {
+        // 35 bits total payload: 0b10101010_11110000_11001100_00110011_101xx
+        // Splitting into different frame boundaries must result in the exact same overall bitstream & CRC.
+        let full_stream = [0b10101010, 0b11110000, 0b11001100, 0b00110011, 0b10100000];
+        let expected_crc = crate::crc::crc32_bits(&full_stream, 35);
+
+        // Split Way A: Frame 0 (15 bits), Frame 1 (20 bits)
+        // Way A Frame 0 (15 bits): 0b10101010_1111000x (bytes: [0xAA, 0xF0])
+        // Way A Frame 1 (20 bits): 0b0_11001100_00110011_101xx -> 0b01100110_00011001_11010xxx (bytes: [0x66, 0x19, 0xD0])
+        let way_a = vec![
+            Frame::First {
+                version: 1,
+                total_qr_count: 2,
+                frame_number: 0,
+                data_type: DataType::Uint8Array,
+                payload_bytes: vec![0xAA, 0xF0],
+                payload_bit_len: 15,
+                frame_crc: 0x1000,
+                overall_crc: None,
+            },
+            Frame::NonFirst {
+                total_qr_count: 2,
+                frame_number: 1,
+                payload_bytes: vec![0x66, 0x19, 0xD0],
+                payload_bit_len: 20,
+                frame_crc: 0x2000,
+                overall_crc: Some(expected_crc),
+            },
+        ];
+
+        // Split Way B: Frame 0 (24 bits), Frame 1 (11 bits)
+        let way_b = vec![
+            Frame::First {
+                version: 1,
+                total_qr_count: 2,
+                frame_number: 0,
+                data_type: DataType::Uint8Array,
+                payload_bytes: vec![0xAA, 0xF0, 0xCC],
+                payload_bit_len: 24,
+                frame_crc: 0x1000,
+                overall_crc: None,
+            },
+            Frame::NonFirst {
+                total_qr_count: 2,
+                frame_number: 1,
+                payload_bytes: vec![0x33, 0xA0],
+                payload_bit_len: 11,
+                frame_crc: 0x2000,
+                overall_crc: Some(expected_crc),
+            },
+        ];
+
+        let crc_a = calculate_overall_crc(&way_a).unwrap();
+        let crc_b = calculate_overall_crc(&way_b).unwrap();
+
+        assert_eq!(crc_a, expected_crc);
+        assert_eq!(crc_b, expected_crc);
+        assert_eq!(crc_a, crc_b);
+    }
+
+    #[test]
+    fn test_verify_overall_crc_match_and_mismatch() {
+        let payload = b"Overall CRC Validation Test";
+        let correct_crc = crate::crc::crc32(payload);
+
+        let frame0 = Frame::First {
+            version: 1,
+            total_qr_count: 2,
+            frame_number: 0,
+            data_type: DataType::Uint8Array,
+            payload_bytes: payload[..10].to_vec(),
+            payload_bit_len: 80,
+            frame_crc: 0x1000,
+            overall_crc: None,
+        };
+
+        // Match case
+        let frame1_match = Frame::NonFirst {
+            total_qr_count: 2,
+            frame_number: 1,
+            payload_bytes: payload[10..].to_vec(),
+            payload_bit_len: (payload.len() - 10) * 8,
+            frame_crc: 0x2000,
+            overall_crc: Some(correct_crc),
+        };
+
+        assert_eq!(
+            verify_overall_crc(&[frame0.clone(), frame1_match]),
+            Ok(true)
+        );
+
+        // Mismatch case
+        let frame1_mismatch = Frame::NonFirst {
+            total_qr_count: 2,
+            frame_number: 1,
+            payload_bytes: payload[10..].to_vec(),
+            payload_bit_len: (payload.len() - 10) * 8,
+            frame_crc: 0x2000,
+            overall_crc: Some(correct_crc ^ 0xFFFFFFFF),
+        };
+
+        assert_eq!(verify_overall_crc(&[frame0, frame1_mismatch]), Ok(false));
+    }
+
+    #[test]
+    fn test_overall_crc_invalid_frame_sets() {
+        // 1) Empty frames
+        assert_eq!(calculate_overall_crc(&[]), Err(FrameError::EmptyFrames));
+
+        // 2) Missing frame (expected 3, provided 2)
+        let f0 = Frame::First {
+            version: 1,
+            total_qr_count: 3,
+            frame_number: 0,
+            data_type: DataType::Uint8Array,
+            payload_bytes: vec![0x01],
+            payload_bit_len: 8,
+            frame_crc: 0x1000,
+            overall_crc: None,
+        };
+        let f2 = Frame::NonFirst {
+            total_qr_count: 3,
+            frame_number: 2,
+            payload_bytes: vec![0x02],
+            payload_bit_len: 8,
+            frame_crc: 0x3000,
+            overall_crc: Some(0x12345678),
+        };
+        assert_eq!(
+            calculate_overall_crc(&[f0.clone(), f2.clone()]),
+            Err(FrameError::IncompleteFrameSet {
+                expected: 3,
+                actual: 2
+            })
+        );
+
+        // 3) Duplicate frame number
+        let f0_dup = f0.clone();
+        let f1 = Frame::NonFirst {
+            total_qr_count: 3,
+            frame_number: 1,
+            payload_bytes: vec![0x03],
+            payload_bit_len: 8,
+            frame_crc: 0x2000,
+            overall_crc: None,
+        };
+        assert_eq!(
+            calculate_overall_crc(&[f0.clone(), f0_dup, f1.clone()]),
+            Err(FrameError::DuplicateFrameNumber(0))
+        );
+
+        // 4) Mismatched total QR count
+        let f1_wrong_total = Frame::NonFirst {
+            total_qr_count: 2, // Mismatch with 3
+            frame_number: 1,
+            payload_bytes: vec![0x03],
+            payload_bit_len: 8,
+            frame_crc: 0x2000,
+            overall_crc: None,
+        };
+        assert_eq!(
+            calculate_overall_crc(&[f0, f1_wrong_total, f2]),
+            Err(FrameError::MismatchedTotalQrCount {
+                expected: 3,
+                actual: 2
+            })
+        );
     }
 }
