@@ -1,14 +1,28 @@
 # フォルダ群
-**/dist/**          merge=theirs
+dist/**          merge=theirs
+src/wasm/**      merge=theirs
 
 # 通常テキスト
 *.txt   text    eol=lf
 
+# 設定
+*.json  text    eol=lf
+*.toml  text    eol=lf
+
+package-lock.json  text    eol=lf  merge=theirs
+*.lock  text    eol=lf  merge=theirs
+
 # 本体コード
 *.js    text    eol=lf
-*.js.map text   eol=lf  merge=theirs
 *.mjs   text    eol=lf
 *.ts    text    eol=lf
+*.css   text    eol=lf
+*.rs    text    eol=lf
+
+*.js.map text   eol=lf  merge=theirs
 *.d.ts  text    eol=lf  merge=theirs
 *.html  text    eol=lf  merge=theirs
-*.css   text    eol=lf
+
+
+*.wasm  binary          merge=theirs
+

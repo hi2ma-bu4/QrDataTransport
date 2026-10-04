@@ -5,18 +5,32 @@
   "license": "Apache-2.0",
   "author": "hi2ma-bu4",
   "type": "module",
-  "main": "src/main.ts",
-  "directories": {
-    "doc": "docs"
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build:wasm": "cargo component build --release --manifest-path wasm/protocol/Cargo.toml",
+    "build:wasm:transpile": "jco transpile wasm/protocol/target/wasm32-wasip1/release/protocol.wasm -o src/wasm",
+    "build:typecheck": "tsc --noEmit",
+    "build:dts": "tsc -p tsconfig.build.json",
+    "build:js": "node build/build.mjs",
+    "build": "npm run build:wasm && npm run build:wasm:transpile && npm run build:typecheck && npm run build:js && npm run build:dts",
+    "test:node": "tsx --test \"test/node/*.test.ts\""
   },
   "volta": {
     "node": "24.21.0",
     "npm": "12.2.0"
   },
   "devDependencies": {
+    "@bytecodealliance/jco": "~1.35.0",
+    "@types/node": "^26.6.4",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }
 }

@@ -6,7 +6,17 @@
 	],
 	"settings": {
 		"cSpell.words": [
-			"HDLC"
+			"bindgen",
+			"bitflags",
+			"bitstream",
+			"cdylib",
+			"HDLC",
+			"qrcodegen",
+			"rxing",
+			"thiserror"
+		],
+		"rust-analyzer.linkedProjects": [
+			"${workspaceFolder}/wasm/protocol/Cargo.toml"
 		]
 	}
 }
