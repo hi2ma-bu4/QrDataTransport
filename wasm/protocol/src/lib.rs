@@ -3,6 +3,7 @@ mod bindings;
 
 pub mod bit_stream;
 pub mod crc;
+pub mod frame;
 pub mod varint;
 
 use bindings::exports::snows::qr_data_transport::protocol::Guest;
