@@ -90,6 +90,108 @@ pub struct DecodeContext {
     pub first_frame_crc: Option<u16>,
 }
 
+/// Lightweight metadata extracted from a Frame header without full body or CRC validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameMetadata {
+    pub start_bit: bool,
+    pub is_first: bool,
+    pub version: Option<u8>,
+    pub total_qr_count: Option<u32>,
+    pub frame_number: u32,
+    pub data_type: Option<DataType>,
+    pub payload_bit_len: usize,
+    pub header_bit_len: usize,
+}
+
+impl FrameMetadata {
+    pub fn is_final(&self) -> bool {
+        if let Some(total) = self.total_qr_count {
+            self.frame_number == total.saturating_sub(1)
+        } else {
+            false
+        }
+    }
+}
+
+/// Parses the header metadata from a raw byte slice bitstream.
+///
+/// Does not perform CRC verification, padding validation, or payload extraction.
+/// For Non-First frames (start_bit = false), `known_total_qr_count` MUST be provided
+/// to determine the bit length of `frame_number`.
+pub fn parse_frame_metadata(
+    data: &[u8],
+    known_total_qr_count: Option<u32>,
+) -> Result<FrameMetadata, FrameError> {
+    let mut reader = BitReader::new(data);
+
+    // 11. Start Bit
+    let start_bit = reader.read_bit()?;
+
+    if start_bit {
+        // First QR
+        // 12. Library Format Version (4 bits)
+        let version = reader.read_bits(4)? as u8;
+        if version == 0 {
+            return Err(FrameError::InvalidVersion(0));
+        }
+
+        // 13. StoredTotalQRCount (16 bits)
+        let stored_total_qr_count = reader.read_bits(16)? as u16;
+        let total_qr_count = stored_total_qr_count as u32 + 1;
+
+        // 14. Frame Number
+        let frame_bits = calculate_frame_bits(total_qr_count);
+        let frame_number = reader.read_bits(frame_bits)? as u32;
+
+        // 15. Data Type (2 bits)
+        let data_type_raw = reader.read_bits(2)? as u8;
+        let data_type = DataType::from_u8(data_type_raw)?;
+
+        // 16. Payload Length (Varint)
+        let payload_bit_len = read_varint(&mut reader)? as usize;
+        let header_bit_len = reader.bit_pos();
+
+        let is_first = start_bit && frame_number == 0;
+
+        Ok(FrameMetadata {
+            start_bit: true,
+            is_first,
+            version: Some(version),
+            total_qr_count: Some(total_qr_count),
+            frame_number,
+            data_type: Some(data_type),
+            payload_bit_len,
+            header_bit_len,
+        })
+    } else {
+        // Non-First QR
+        let total_qr_count = known_total_qr_count.ok_or(FrameError::MissingContext)?;
+
+        if total_qr_count < 1 || total_qr_count > 65536 {
+            return Err(FrameError::InvalidTotalQrCount(total_qr_count));
+        }
+
+        // 14. Frame Number
+        let frame_bits = calculate_frame_bits(total_qr_count);
+        let frame_number = reader.read_bits(frame_bits)? as u32;
+
+        // 16. Payload Length (Varint)
+        let payload_bit_len = read_varint(&mut reader)? as usize;
+        let header_bit_len = reader.bit_pos();
+
+        Ok(FrameMetadata {
+            start_bit: false,
+            is_first: false,
+            version: None,
+            total_qr_count: Some(total_qr_count),
+            frame_number,
+            data_type: None,
+            payload_bit_len,
+            header_bit_len,
+        })
+    }
+}
+
 /// Representation of a parsed or constructed Frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
@@ -319,26 +421,20 @@ pub fn encode_frame(
 ///
 /// For Non-First frames (Start Bit = 0), `context` MUST provide `total_qr_count` and `first_frame_crc`.
 pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Frame, FrameError> {
+    let known_total = context.and_then(|c| c.total_qr_count);
+    let meta = parse_frame_metadata(data, known_total)?;
+
     let mut reader = BitReader::new(data);
+    for _ in 0..meta.header_bit_len {
+        reader.read_bit()?;
+    }
 
-    // 11. Start Bit
-    let start_bit = reader.read_bit()?;
-
-    if start_bit {
-        // First QR
-        // 12. Library Format Version (4 bits)
-        let version = reader.read_bits(4)? as u8;
-        if version == 0 {
-            return Err(FrameError::InvalidVersion(0));
-        }
-
-        // 13. StoredTotalQRCount (16 bits)
-        let stored_total_qr_count = reader.read_bits(16)? as u16;
-        let total_qr_count = stored_total_qr_count as u32 + 1;
-
-        // 14. Frame Number
-        let frame_bits = calculate_frame_bits(total_qr_count);
-        let frame_number = reader.read_bits(frame_bits)? as u32;
+    if meta.start_bit {
+        let version = meta.version.unwrap();
+        let total_qr_count = meta.total_qr_count.unwrap();
+        let frame_number = meta.frame_number;
+        let data_type = meta.data_type.unwrap();
+        let payload_bit_len = meta.payload_bit_len;
 
         if frame_number != 0 {
             return Err(FrameError::InvalidFrameNumber {
@@ -347,17 +443,9 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
             });
         }
 
-        // 15. Data Type (2 bits)
-        let data_type_raw = reader.read_bits(2)? as u8;
-        let data_type = DataType::from_u8(data_type_raw)?;
-
-        // 16. Payload Length (Varint)
-        let payload_bit_len = read_varint(&mut reader)? as usize;
-
         let is_final = frame_number == total_qr_count - 1;
 
-        // Calculate required bit counts for payload, padding, frame CRC, and overall CRC
-        let header_bit_len = reader.bit_pos();
+        let header_bit_len = meta.header_bit_len;
         let rem = (header_bit_len + payload_bit_len) % 8;
         let padding_bits = if rem > 0 { 8 - rem } else { 0 };
         let frame_crc_bits = 16;
@@ -421,18 +509,12 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
             overall_crc,
         })
     } else {
-        // Non-First QR
         let ctx = context.ok_or(FrameError::MissingContext)?;
-        let total_qr_count = ctx.total_qr_count.ok_or(FrameError::MissingContext)?;
+        let total_qr_count = meta.total_qr_count.unwrap();
         let first_frame_crc = ctx.first_frame_crc.ok_or(FrameError::MissingContext)?;
 
-        if total_qr_count < 1 || total_qr_count > 65536 {
-            return Err(FrameError::InvalidTotalQrCount(total_qr_count));
-        }
-
-        // 14. Frame Number
-        let frame_bits = calculate_frame_bits(total_qr_count);
-        let frame_number = reader.read_bits(frame_bits)? as u32;
+        let frame_number = meta.frame_number;
+        let payload_bit_len = meta.payload_bit_len;
 
         if frame_number == 0 || frame_number >= total_qr_count {
             return Err(FrameError::InvalidFrameNumber {
@@ -441,12 +523,9 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
             });
         }
 
-        // 16. Payload Length (Varint)
-        let payload_bit_len = read_varint(&mut reader)? as usize;
-
         let is_final = frame_number == total_qr_count - 1;
 
-        let header_bit_len = reader.bit_pos();
+        let header_bit_len = meta.header_bit_len;
         let rem = (header_bit_len + payload_bit_len) % 8;
         let padding_bits = if rem > 0 { 8 - rem } else { 0 };
         let frame_crc_bits = 16;
@@ -612,6 +691,73 @@ pub fn verify_overall_crc(frames: &[Frame]) -> Result<bool, FrameError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_frame_metadata_first_and_non_first() {
+        // First Frame (N=3, FN=0, Uint8Array, PayloadLen=16)
+        let frame0 = Frame::First {
+            version: 1,
+            total_qr_count: 3,
+            frame_number: 0,
+            data_type: DataType::Uint8Array,
+            payload_bytes: vec![0x12, 0x34],
+            payload_bit_len: 16,
+            frame_crc: 0,
+            overall_crc: None,
+        };
+        let encoded0 = encode_frame(&frame0, None).unwrap();
+
+        let meta0 = parse_frame_metadata(&encoded0, None).unwrap();
+        assert_eq!(meta0.start_bit, true);
+        assert_eq!(meta0.is_first, true);
+        assert_eq!(meta0.version, Some(1));
+        assert_eq!(meta0.total_qr_count, Some(3));
+        assert_eq!(meta0.frame_number, 0);
+        assert_eq!(meta0.data_type, Some(DataType::Uint8Array));
+        assert_eq!(meta0.payload_bit_len, 16);
+        assert_eq!(meta0.is_final(), false);
+
+        let decoded0 = decode_frame(&encoded0, None).unwrap();
+        let first_crc = decoded0.frame_crc();
+
+        // Non-First Frame (N=3, FN=2 - Final, PayloadLen=8)
+        let frame2 = Frame::NonFirst {
+            total_qr_count: 3,
+            frame_number: 2,
+            payload_bytes: vec![0xAB],
+            payload_bit_len: 8,
+            frame_crc: 0,
+            overall_crc: Some(0x12345678),
+        };
+        let encoded2 = encode_frame(&frame2, Some(first_crc)).unwrap();
+
+        let meta2 = parse_frame_metadata(&encoded2, Some(3)).unwrap();
+        assert_eq!(meta2.start_bit, false);
+        assert_eq!(meta2.is_first, false);
+        assert_eq!(meta2.version, None);
+        assert_eq!(meta2.total_qr_count, Some(3));
+        assert_eq!(meta2.frame_number, 2);
+        assert_eq!(meta2.data_type, None);
+        assert_eq!(meta2.payload_bit_len, 8);
+        assert_eq!(meta2.is_final(), true);
+    }
+
+    #[test]
+    fn test_parse_frame_metadata_missing_known_total_count() {
+        // Non-First frame without providing known_total_qr_count should fail
+        let frame1 = Frame::NonFirst {
+            total_qr_count: 2,
+            frame_number: 1,
+            payload_bytes: vec![0x00],
+            payload_bit_len: 8,
+            frame_crc: 0,
+            overall_crc: Some(0),
+        };
+        let encoded1 = encode_frame(&frame1, Some(0x1234)).unwrap();
+
+        let err = parse_frame_metadata(&encoded1, None).unwrap_err();
+        assert_eq!(err, FrameError::MissingContext);
+    }
 
     #[test]
     fn test_calculate_frame_bits() {
