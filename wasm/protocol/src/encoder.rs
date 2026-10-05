@@ -315,18 +315,14 @@ mod tests {
     #[test]
     fn test_uint8array_multi_byte_and_bit_splitting() {
         let data = [0x12, 0x34, 0x56, 0x78]; // 32 bits
-        // max_payload_bits = 10 -> N = ceil(32/10) = 4 frames
-        // Frame 0: 10 bits -> 0x12, 0x34 (top 2 bits: 00) => 0b00010010_00xxxxxx (0x12, 0x34 top 2 bits: 00)
-        // Frame 1: 10 bits
-        // Frame 2: 10 bits
-        // Frame 3: 2 bits
-        let output = encode_data(InputData::Uint8Array(&data), 10).unwrap();
-        assert_eq!(output.frames.len(), 4);
+        // With max_frame_bits = 64:
+        // N = 3 frames (payload bit lengths: 16, 16, 0 bits)
+        let output = encode_data(InputData::Uint8Array(&data), 64).unwrap();
+        assert_eq!(output.frames.len(), 3);
 
-        assert_eq!(output.frames[0].payload_bit_len(), 10);
-        assert_eq!(output.frames[1].payload_bit_len(), 10);
-        assert_eq!(output.frames[2].payload_bit_len(), 10);
-        assert_eq!(output.frames[3].payload_bit_len(), 2);
+        assert_eq!(output.frames[0].payload_bit_len(), 16);
+        assert_eq!(output.frames[1].payload_bit_len(), 16);
+        assert_eq!(output.frames[2].payload_bit_len(), 0);
 
         assert!(verify_overall_crc(&output.frames).unwrap());
 
@@ -335,9 +331,9 @@ mod tests {
         assert_eq!(decoded_0, output.frames[0]);
         let first_crc = decoded_0.frame_crc();
 
-        for i in 1..4 {
+        for i in 1..3 {
             let ctx = DecodeContext {
-                total_qr_count: Some(4),
+                total_qr_count: Some(3),
                 first_frame_crc: Some(first_crc),
             };
             let decoded_i = decode_frame(&output.wire_bytes[i], Some(&ctx)).unwrap();
@@ -367,7 +363,7 @@ mod tests {
     fn test_string_ascii_only() {
         // "ABC" -> Mode 0 (1b) + 'A' (7b: 1000001) + 'B' (7b: 1000010) + 'C' (7b: 1000011)
         // Total payload bit length = 1 + 21 = 22 bits
-        let output = encode_data(InputData::String("ABC"), 100).unwrap();
+        let output = encode_data(InputData::String("ABC"), 120).unwrap();
         assert_eq!(output.frames.len(), 1);
 
         let frame = &output.frames[0];
@@ -409,7 +405,7 @@ mod tests {
         // Non-ASCII detected -> Mode = 1 (UTF-8)
         // Total bits = 1 + (3 * 8) = 25 bits
         let s = "あ";
-        let output = encode_data(InputData::String(s), 100).unwrap();
+        let output = encode_data(InputData::String(s), 120).unwrap();
         assert_eq!(output.frames.len(), 1);
 
         let frame = &output.frames[0];
@@ -431,7 +427,7 @@ mod tests {
         // Bytes: 'A' (0x41), 'あ' (0xE3, 0x81, 0x82) -> 4 bytes total
         // Total bits = 1 + (4 * 8) = 33 bits
         let s = "Aあ";
-        let output = encode_data(InputData::String(s), 100).unwrap();
+        let output = encode_data(InputData::String(s), 120).unwrap();
         assert_eq!(output.frames.len(), 1);
 
         let frame = &output.frames[0];
@@ -451,9 +447,9 @@ mod tests {
     #[test]
     fn test_string_mode_bit_only_once_in_frame_0() {
         // "Hello World" -> 11 chars -> ASCII Mode: 1 + 11*7 = 78 bits
-        // Split with max_payload_bits = 30 -> 3 frames: 30, 30, 18 bits
+        // Split with max_frame_bits = 80 -> 3 frames: 32, 46, 0 bits
         let s = "Hello World";
-        let output = encode_data(InputData::String(s), 30).unwrap();
+        let output = encode_data(InputData::String(s), 80).unwrap();
         assert_eq!(output.frames.len(), 3);
 
         // Frame 0 payload starts with Mode bit (0)
@@ -465,10 +461,9 @@ mod tests {
         assert_eq!(r0.read_bit().unwrap(), false); // Mode = 0
 
         // Frame 1 payload DOES NOT start with Mode bit, but continues string data bits
-        // Frame 0 has Mode(1) + 29 bits of string data.
-        // Frame 1 has next 30 bits of string data.
-        assert_eq!(output.frames[1].payload_bit_len(), 30);
-        assert_eq!(output.frames[2].payload_bit_len(), 18);
+        assert_eq!(output.frames[0].payload_bit_len(), 32);
+        assert_eq!(output.frames[1].payload_bit_len(), 46);
+        assert_eq!(output.frames[2].payload_bit_len(), 0);
 
         // Reconstruct full bitstream from all frame payloads
         let concat_writer = crate::frame::concat_payload_bits(&output.frames).unwrap();
@@ -490,44 +485,45 @@ mod tests {
         // Test exact boundary, boundary-1, boundary+1
         let data = [0xAA; 10]; // 80 bits
 
-        // 1) Exact boundary: max_payload_bits = 40 -> 2 frames (40, 40)
-        let out_exact = encode_data(InputData::Uint8Array(&data), 40).unwrap();
-        assert_eq!(out_exact.frames.len(), 2);
-        assert_eq!(out_exact.frames[0].payload_bit_len(), 40);
-        assert_eq!(out_exact.frames[1].payload_bit_len(), 40);
+        // 1) max_frame_bits = 80 -> 3 frames (32, 48, 0 bits)
+        let out_exact = encode_data(InputData::Uint8Array(&data), 80).unwrap();
+        assert_eq!(out_exact.frames.len(), 3);
+        assert_eq!(out_exact.frames[0].payload_bit_len(), 32);
+        assert_eq!(out_exact.frames[1].payload_bit_len(), 48);
+        assert_eq!(out_exact.frames[2].payload_bit_len(), 0);
         assert!(verify_overall_crc(&out_exact.frames).unwrap());
 
-        // 2) Boundary-1: max_payload_bits = 39 -> 3 frames (39, 39, 2)
-        let out_sub = encode_data(InputData::Uint8Array(&data), 39).unwrap();
+        // 2) max_frame_bits = 72 -> 3 frames (24, 46, 10 bits)
+        let out_sub = encode_data(InputData::Uint8Array(&data), 72).unwrap();
         assert_eq!(out_sub.frames.len(), 3);
-        assert_eq!(out_sub.frames[0].payload_bit_len(), 39);
-        assert_eq!(out_sub.frames[1].payload_bit_len(), 39);
-        assert_eq!(out_sub.frames[2].payload_bit_len(), 2);
+        assert_eq!(out_sub.frames[0].payload_bit_len(), 24);
+        assert_eq!(out_sub.frames[1].payload_bit_len(), 46);
+        assert_eq!(out_sub.frames[2].payload_bit_len(), 10);
         assert!(verify_overall_crc(&out_sub.frames).unwrap());
 
-        // 3) Boundary+1: max_payload_bits = 41 -> 2 frames (41, 39)
-        let out_plus = encode_data(InputData::Uint8Array(&data), 41).unwrap();
+        // 3) max_frame_bits = 96 -> 2 frames (49, 31 bits)
+        let out_plus = encode_data(InputData::Uint8Array(&data), 96).unwrap();
         assert_eq!(out_plus.frames.len(), 2);
-        assert_eq!(out_plus.frames[0].payload_bit_len(), 41);
-        assert_eq!(out_plus.frames[1].payload_bit_len(), 39);
+        assert_eq!(out_plus.frames[0].payload_bit_len(), 49);
+        assert_eq!(out_plus.frames[1].payload_bit_len(), 31);
         assert!(verify_overall_crc(&out_plus.frames).unwrap());
     }
 
     #[test]
     fn test_final_frame_ending_mid_byte() {
-        // 16 bits total payload, split into 13 + 3 bits.
-        let data = [0xFF, 0xF0];
-        let output = encode_data(InputData::Uint8Array(&data), 13).unwrap();
+        // 24 bits total payload, split into non-byte-aligned 17 + 7 bits with max_frame_bits = 64.
+        let data = [0xFF, 0xF0, 0xA0];
+        let output = encode_data(InputData::Uint8Array(&data), 64).unwrap();
 
         assert_eq!(output.frames.len(), 2);
-        assert_eq!(output.frames[0].payload_bit_len(), 13);
-        assert_eq!(output.frames[1].payload_bit_len(), 3);
+        assert_eq!(output.frames[0].payload_bit_len(), 17);
+        assert_eq!(output.frames[1].payload_bit_len(), 7);
         assert!(verify_overall_crc(&output.frames).unwrap());
 
-        // Reconstruct the payload bitstream and verify that all 16 original bits
+        // Reconstruct the payload bitstream and verify that all original bits
         // survive the non-byte-aligned split.
         let concat_writer = crate::frame::concat_payload_bits(&output.frames).unwrap();
-        assert_eq!(concat_writer.bit_len(), 16);
+        assert_eq!(concat_writer.bit_len(), 24);
         assert_eq!(concat_writer.as_bytes(), &data);
     }
 
