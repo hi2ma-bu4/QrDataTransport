@@ -6,14 +6,14 @@ param(
     [string]$To
 )
 
-$specFiles = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter "*v7.md" -File)
+$specFiles = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter "*v8.md" -File)
 
 if ($specFiles.Count -eq 0) {
-    throw "Specification file (*v7.md) was not found: $PSScriptRoot"
+    throw "Specification file (*v8.md) was not found: $PSScriptRoot"
 }
 
 if ($specFiles.Count -gt 1) {
-    throw "Multiple specification files matching *v7.md were found: $PSScriptRoot"
+    throw "Multiple specification files matching *v8.md were found: $PSScriptRoot"
 }
 
 $specFile = $specFiles[0]
