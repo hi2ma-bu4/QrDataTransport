@@ -38,8 +38,8 @@ pub struct EncodeOutput {
 }
 
 /// Encodes input data (Uint8Array or String) into a set of Frames and their wire format byte vectors.
-pub fn encode_data(data: InputData, max_payload_bits: usize) -> Result<EncodeOutput, EncoderError> {
-    if max_payload_bits == 0 {
+pub fn encode_data(data: InputData, max_frame_bits: usize) -> Result<EncodeOutput, EncoderError> {
+    if max_frame_bits == 0 {
         return Err(EncoderError::ZeroMaxPayloadBits);
     }
 
@@ -71,28 +71,122 @@ pub fn encode_data(data: InputData, max_payload_bits: usize) -> Result<EncodeOut
 
     let total_payload_bits = payload_writer.bit_len();
 
-    // 2. Determine Total QR Count N
-    let total_qr_count_usize = if total_payload_bits == 0 {
-        1
-    } else {
-        (total_payload_bits + max_payload_bits - 1) / max_payload_bits
+    // Frame全体のbit数を計算する。
+    //
+    // Payload Lengthは6bit単位のVarintなので、payload bit長によって
+    // Header長も変化する。PaddingはFrame CRC直前のbyte境界まで。
+    let varint_bit_len = |value: usize| -> usize {
+        let mut value = value as u64;
+        let mut bits = 7;
+        while value >= 64 {
+            value >>= 6;
+            bits += 7;
+        }
+        bits
     };
 
-    if total_qr_count_usize > 65536 {
-        return Err(EncoderError::ExceedsMaxFrames {
-            total_qr_count: total_qr_count_usize as u32,
-        });
+    let frame_bit_len = |total_qr_count: u32, frame_number: u32, payload_bit_len: usize| -> usize {
+        let frame_bits = crate::frame::calculate_frame_bits(total_qr_count);
+
+        let is_first = frame_number == 0;
+        let is_final = frame_number == total_qr_count - 1;
+
+        let header_bits = if is_first {
+            // Start + Version + StoredTotalQRCount + FrameNumber + DataType
+            1 + 4 + 16 + frame_bits + 2 + varint_bit_len(payload_bit_len)
+        } else {
+            // Start + FrameNumber
+            1 + frame_bits + varint_bit_len(payload_bit_len)
+        };
+
+        let payload_end = header_bits + payload_bit_len;
+        let padding_bits = (8 - (payload_end % 8)) % 8;
+
+        header_bits
+            + payload_bit_len
+            + padding_bits
+            + 16 // Frame CRC
+            + if is_final { 32 } else { 0 } // Overall CRC
+    };
+
+    // 指定されたFrame全体のbit数に収まる最大Payload bit数を求める。
+    //
+    // Frame bit数はPayload bit数に対して単調非減少なので、
+    // binary searchで正確に求められる。
+    let max_payload_for_frame = |total_qr_count: u32, frame_number: u32| -> usize {
+        let mut low = 0usize;
+        let mut high = max_frame_bits;
+
+        while low < high {
+            let mid = low + (high - low + 1) / 2;
+
+            if frame_bit_len(total_qr_count, frame_number, mid) <= max_frame_bits {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+
+        low
+    };
+
+    // 2. Determine the minimum Total QR Count N.
+    //
+    // NによってFrameBitsが変化し、さらにFirst / Intermediate / Finalで
+    // Frame構造が異なるため、Nを単純な二分探索にはしない。
+    // 最大65536なので、候補を順番に確認すれば十分。
+    let mut total_qr_count = None;
+
+    for n in 1u32..=65536 {
+        let first_capacity = max_payload_for_frame(n, 0);
+
+        // N=1の場合、First FrameがそのままFinal Frame。
+        if n == 1 {
+            if first_capacity >= total_payload_bits {
+                total_qr_count = Some(1);
+                break;
+            }
+            continue;
+        }
+
+        let final_capacity = max_payload_for_frame(n, n - 1);
+
+        // Intermediate FrameはFirst/Finalとは構造が異なる。
+        let middle_capacity = if n > 2 {
+            max_payload_for_frame(n, 1)
+        } else {
+            0
+        };
+
+        let total_capacity = first_capacity
+            .saturating_add(final_capacity)
+            .saturating_add(middle_capacity.saturating_mul((n - 2) as usize));
+
+        if total_capacity >= total_payload_bits {
+            total_qr_count = Some(n);
+            break;
+        }
     }
 
-    let total_qr_count = total_qr_count_usize as u32;
+    let total_qr_count = total_qr_count.ok_or(EncoderError::ExceedsMaxFrames {
+        total_qr_count: 65537,
+    })?;
 
-    // 3. Split payload bitstream into frame payload chunks
+    // 3. Split payload bitstream into frame payload chunks.
+    //
+    // Frameごとの最大Payload容量は同じとは限らないため、
+    // First → Intermediate → Finalの順に、そのFrameへ入る最大量を
+    // 元のPayload bitstreamから順番に切り出す。
     let mut payload_reader =
         BitReader::new_with_bit_len(payload_writer.as_bytes(), total_payload_bits)?;
+
     let mut initial_frames = Vec::with_capacity(total_qr_count as usize);
 
     for frame_number in 0..total_qr_count {
-        let chunk_bits = std::cmp::min(max_payload_bits, payload_reader.remaining_bits());
+        let frame_capacity = max_payload_for_frame(total_qr_count, frame_number);
+        let remaining_bits = payload_reader.remaining_bits();
+        let chunk_bits = std::cmp::min(frame_capacity, remaining_bits);
+
         let mut chunk_writer = BitWriter::with_capacity_bits(chunk_bits);
         for _ in 0..chunk_bits {
             let bit = payload_reader.read_bit()?;
