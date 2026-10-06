@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DataApi } from "../../dist/index.js";
+import { DataApi } from "../../dist/QrDataTransport.js";
 
 test("boundary check: maxFrameBits = 0 should return error", () => {
 	const data = new Uint8Array([1, 2, 3]);

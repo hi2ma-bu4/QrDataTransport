@@ -17,7 +17,7 @@ const bundle = await rollup({
 });
 
 await bundle.write({
-	file: resolve(distDir, "index.d.ts"),
+	file: resolve(distDir, "QrDataTransport.d.ts"),
 	format: "es",
 });
 

@@ -10297,4 +10297,4 @@ export {
   protocol,
   setupWorkerSelfListener
 };
-//# sourceMappingURL=index.js.map
+//# sourceMappingURL=QrDataTransport.js.map

@@ -13,7 +13,7 @@ await mkdir(distDir, { recursive: true });
 
 await build({
 	entryPoints: [resolve(srcDir, "main.ts")],
-	outfile: resolve(distDir, "index.js"),
+	outfile: resolve(distDir, "QrDataTransport.js"),
 	bundle: true,
 	format: "esm",
 	platform: "neutral",

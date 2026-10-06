@@ -13,12 +13,12 @@
     "url": "https://github.com/hi2ma-bu4/qrdatatransport/issues"
   },
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/QrDataTransport.js",
+  "types": "./dist/QrDataTransport.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/QrDataTransport.d.ts",
+      "import": "./dist/QrDataTransport.js"
     }
   },
   "scripts": {

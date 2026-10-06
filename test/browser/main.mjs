@@ -1,5 +1,5 @@
 // 本実装ができるまでの仮
-import { DataApi } from "../../dist/index.js";
+import { DataApi } from "../../dist/QrDataTransport.js";
 
 const inputTypeElements = document.querySelectorAll('input[name="input-type"]');
 const stringInputElement = document.querySelector("#string-input");

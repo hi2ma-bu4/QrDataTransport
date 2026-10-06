@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DataApi } from "../../dist/index.js";
+import { DataApi } from "../../dist/QrDataTransport.js";
 
 test("DataApi.encodeBytes and DataApi.decodeFrames roundtrip", () => {
 	const data = new Uint8Array([1, 2, 3, 4, 5, 255, 0, 128]);

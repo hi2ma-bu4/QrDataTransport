@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DataApi } from "../../dist/index.js";
+import { DataApi } from "../../dist/QrDataTransport.js";
 
 test("multi-frame splitting and reassembly for Uint8Array", () => {
 	// 32 bytes (256 bits) with small maxFrameBits = 64 forces multiple frames

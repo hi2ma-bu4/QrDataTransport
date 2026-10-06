@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DataApi } from "../../dist/index.js";
+import { DataApi } from "../../dist/QrDataTransport.js";
 
 test("corrupted frame wire bytes should result in crcValid = false", () => {
 	const data = new Uint8Array([10, 20, 30, 40, 50]);

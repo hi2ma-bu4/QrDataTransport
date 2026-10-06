@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DataApi } from "../../dist/index.js";
+import { DataApi } from "../../dist/QrDataTransport.js";
 
 test("generateQrMatrix generates binary module matrix using qrcodegen", () => {
 	const data = new Uint8Array([0x01, 0x02, 0x03]);
