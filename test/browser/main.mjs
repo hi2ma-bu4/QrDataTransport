@@ -1,5 +1,5 @@
 // 本実装ができるまでの仮
-import { protocol } from "../../dist/index.js";
+import { DataApi } from "../../dist/index.js";
 
 const inputTypeElements = document.querySelectorAll('input[name="input-type"]');
 const stringInputElement = document.querySelector("#string-input");
@@ -27,11 +27,11 @@ testButton.addEventListener("click", async () => {
 			throw new Error("encode returned no frames");
 		}
 
-		const decoded = protocol.decodeFrames(wireFrames);
+		const decoded = DataApi.decodeFrames(wireFrames);
 
 		if (inputType === "string") {
 			verifyString(input, decoded);
-			showStringResult(input, decoded.val, wireFrames.length);
+			showStringResult(input, decoded.data, wireFrames.length);
 		} else {
 			verifyBytes(input, decoded);
 			showFileResult(input.length, wireFrames.length);
@@ -89,11 +89,11 @@ async function getInput(inputType) {
 
 function encodeInput(inputType, input, maxFrameBits) {
 	if (inputType === "string") {
-		return protocol.encodeText(input, maxFrameBits);
+		return DataApi.encodeText(input, maxFrameBits);
 	}
 
 	if (inputType === "file") {
-		return protocol.encodeBytes(input, maxFrameBits);
+		return DataApi.encodeBytes(input, maxFrameBits);
 	}
 
 	throw new Error(`Unknown input type: ${inputType}`);
@@ -110,21 +110,21 @@ function getWireFrames(encoded) {
 }
 
 function verifyString(input, decoded) {
-	if (decoded.tag !== "text") {
-		throw new Error(`decode result type mismatch: expected text, got ${decoded.tag}`);
+	if (decoded.type !== "string") {
+		throw new Error(`decode result type mismatch: expected string, got ${decoded.type}`);
 	}
 
-	if (input !== decoded.val) {
-		throw new Error(`decode result mismatch:\nexpected: ${input}\nactual:   ${decoded.val}`);
+	if (input !== decoded.data) {
+		throw new Error(`decode result mismatch:\nexpected: ${input}\nactual:   ${decoded.data}`);
 	}
 }
 
 function verifyBytes(input, decoded) {
-	if (decoded.tag !== "bytes") {
-		throw new Error(`decode result type mismatch: expected bytes, got ${decoded.tag}`);
+	if (decoded.type !== "Uint8Array") {
+		throw new Error(`decode result type mismatch: expected Uint8Array, got ${decoded.type}`);
 	}
 
-	const output = decoded.val;
+	const output = decoded.data;
 
 	if (input.length !== output.length) {
 		throw new Error(`decode result length mismatch: expected ${input.length}, got ${output.length}`);

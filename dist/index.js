@@ -10175,7 +10175,126 @@ var protocol = {
   generateQrMatrix,
   parseFrame
 };
+
+// src/api/dataApi.ts
+function ensureSharedUint8Array(arr) {
+  if (!arr) {
+    return new Uint8Array(0);
+  }
+  if (arr.byteOffset === 0 && arr.byteLength === arr.buffer.byteLength) {
+    return arr;
+  }
+  return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+var DataApi = class {
+  /**
+   * Encodes raw bytes into wire frames using WASM protocol core.
+   */
+  static encodeBytes(data, maxFrameBits) {
+    const bytes = ensureSharedUint8Array(data);
+    return protocol.encodeBytes(bytes, maxFrameBits);
+  }
+  /**
+   * Encodes text into wire frames using WASM protocol core.
+   */
+  static encodeText(text, maxFrameBits) {
+    return protocol.encodeText(text, maxFrameBits);
+  }
+  /**
+   * Parses a single wire frame and verifies its CRC.
+   */
+  static parseFrame(wireBytes, knownTotalQrCount, knownFirstFrameCrc) {
+    const bytes = ensureSharedUint8Array(wireBytes);
+    return protocol.parseFrame(bytes, knownTotalQrCount, knownFirstFrameCrc);
+  }
+  /**
+   * Decodes a complete list of wire frames and returns the payload along with its type.
+   * Returns { type: "Uint8Array" | "string", data: Uint8Array | string } according to Spec v8.
+   */
+  static decodeFrames(wireFrames) {
+    const sharedFrames = wireFrames.map(ensureSharedUint8Array);
+    const decoded = protocol.decodeFrames(sharedFrames);
+    if (decoded.tag === "bytes") {
+      return {
+        type: "Uint8Array",
+        data: decoded.val
+      };
+    }
+    if (decoded.tag === "text") {
+      return {
+        type: "string",
+        data: decoded.val
+      };
+    }
+    throw new Error("Unknown decoded payload tag");
+  }
+  /**
+   * Generates a binary QR module matrix using qrcodegen via WASM.
+   */
+  static generateQrMatrix(wireBytes, qrVersion, ecLevel) {
+    const bytes = ensureSharedUint8Array(wireBytes);
+    return protocol.generateQrMatrix(bytes, qrVersion, ecLevel);
+  }
+  /**
+   * Decodes QR code image pixels (RGBA) to wire bytes using rxing via WASM.
+   */
+  static decodeQrImage(rgbaPixels, width, height) {
+    const pixels = ensureSharedUint8Array(rgbaPixels);
+    return protocol.decodeQrImage(pixels, width, height);
+  }
+};
+
+// src/utils/worker.ts
+function isWorkerContext() {
+  if (typeof self !== "undefined" && typeof window === "undefined") {
+    return true;
+  }
+  const g = globalThis;
+  if (g.process && g.process.versions && g.process.versions.node) {
+    try {
+      const req = globalThis.require;
+      if (typeof req === "function") {
+        const workerThreads = req("node:worker_threads");
+        return !workerThreads.isMainThread;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+function setupWorkerSelfListener(handler) {
+  if (!isWorkerContext()) {
+    return;
+  }
+  const g = globalThis;
+  if (g.process && g.process.versions && g.process.versions.node) {
+    try {
+      const req = globalThis.require;
+      if (typeof req === "function") {
+        const workerThreads = req("node:worker_threads");
+        if (workerThreads.parentPort) {
+          workerThreads.parentPort.on("message", async (msg) => {
+            const res = await handler(msg);
+            workerThreads.parentPort.postMessage(res);
+          });
+          return;
+        }
+      }
+    } catch {
+    }
+  }
+  if (typeof self !== "undefined") {
+    self.addEventListener("message", async (event) => {
+      const res = await handler(event.data);
+      self.postMessage(res);
+    });
+  }
+}
 export {
-  protocol
+  DataApi,
+  isWorkerContext,
+  protocol,
+  setupWorkerSelfListener
 };
 //# sourceMappingURL=index.js.map
