@@ -13,6 +13,13 @@ wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
 [lib]
 crate-type = ["cdylib"]
 
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
 [package.metadata.component]
 package = "component:protocol"
 

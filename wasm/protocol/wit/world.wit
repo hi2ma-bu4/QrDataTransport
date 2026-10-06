@@ -1,8 +1,70 @@
 package snows:qr-data-transport;
 
 interface protocol {
-    // [仮定義] これは型定義サンプルです。実際のデータ構造に合わせて変更してください。そのまま使用してはいけません。
-    decode: func(data: list<u8>) -> list<u8>;
+    enum data-type {
+        uint8array,
+        bytes-string,
+    }
+
+    enum string-mode {
+        ascii,
+        utf8,
+    }
+
+    enum qr-ec-level {
+        l,
+        m,
+        q,
+        h,
+    }
+
+    record frame-metadata {
+        is-first: bool,
+        version: u8,
+        total-qr-count: u32,
+        frame-number: u32,
+        data-type: option<data-type>,
+        payload-bit-len: u32,
+        frame-crc: u16,
+        overall-crc: option<u32>,
+        crc-valid: bool,
+    }
+
+    variant decoded-payload {
+        bytes(list<u8>),
+        text(string),
+    }
+
+    record encoded-frame-output {
+        wire-bytes: list<u8>,
+        frame-number: u32,
+        total-qr-count: u32,
+    }
+
+    record encode-result {
+        frames: list<encoded-frame-output>,
+    }
+
+    // 入力された生のバイトまたは文字列を、max-frame-bits に基づいてスプリット ワイヤー フレームにエンコードします。
+    encode-bytes: func(data: list<u8>, max-frame-bits: u32) -> result<encode-result, string>;
+    encode-text: func(text: string, max-frame-bits: u32) -> result<encode-result, string>;
+
+    // 単一のワイヤー フレームのメタデータを解析し、その CRC を検証します。
+    parse-frame: func(wire-bytes: list<u8>, known-total-qr-count: option<u32>, known-first-frame-crc: option<u16>) -> result<frame-metadata, string>;
+
+    // ワイヤー フレームの完全なリストを復元されたデータ (Uint8Array または String) にデコードします。
+    decode-frames: func(wire-frames: list<list<u8>>) -> result<decoded-payload, string>;
+
+    // Generates QR module grid (binary 0/1 array, width, height) from wire frame bytes using qrcodegen
+    record qr-module-matrix {
+        width: u32,
+        height: u32,
+        modules: list<u8>, // 0 は明、1 は暗
+    }
+    generate-qr-matrix: func(wire-bytes: list<u8>, qr-version: u8, ec-level: qr-ec-level) -> result<qr-module-matrix, string>;
+
+    // rxing を使用して QR コード画像ピクセル (RGBA) をワイヤーバイトにデコードします
+    decode-qr-image: func(rgba-pixels: list<u8>, width: u32, height: u32) -> result<list<u8>, string>;
 }
 
 world qr-data-transport {

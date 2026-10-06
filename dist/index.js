@@ -1,6 +1,1417 @@
+// node_modules/@bytecodealliance/preview2-shim/dist/browser/common.js
+var MAX_U64 = (1n << 64n) - 1n;
+function checkedU64(value, name) {
+  if (typeof value !== "bigint" || value < 0n || value > MAX_U64) {
+    throw new TypeError(`${name} must be a valid u64`);
+  }
+  return value;
+}
+function checkedU64AsNumber(value, name) {
+  checkedU64(value, name);
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError(`${name} exceeds JavaScript's safe integer range`);
+  }
+  return Number(value);
+}
+
+// node_modules/@bytecodealliance/preview2-shim/dist/browser/io.js
+var id = 0;
+var symbolDispose = Symbol.dispose || /* @__PURE__ */ Symbol.for("dispose");
+var checkedLength = (len, name = "length") => checkedU64AsNumber(len, name);
+function closed() {
+  throw { tag: "closed" };
+}
+var IoError = class extends Error {
+  toDebugString() {
+    return this.message;
+  }
+};
+var InputStream = class _InputStream {
+  id;
+  handler;
+  #open = true;
+  #children = /* @__PURE__ */ new Set();
+  static _create(handler) {
+    const stream = new _InputStream();
+    if (!handler) {
+      console.trace("no handler");
+    }
+    stream.id = ++id;
+    stream.handler = handler;
+    return stream;
+  }
+  read(len) {
+    checkedLength(len);
+    if (!this.#open) {
+      closed();
+    }
+    if (this.handler.read) {
+      return this.handler.read.call(this, len);
+    }
+    return this.handler.blockingRead.call(this, len);
+  }
+  blockingRead(len) {
+    checkedLength(len);
+    if (!this.#open) {
+      closed();
+    }
+    return this.handler.blockingRead.call(this, len);
+  }
+  skip(len) {
+    checkedLength(len);
+    if (!this.#open) {
+      closed();
+    }
+    if (this.handler.skip) {
+      return this.handler.skip.call(this, len);
+    }
+    if (this.handler.read) {
+      const bytes = this.handler.read.call(this, len);
+      return BigInt(bytes.byteLength);
+    }
+    return this.blockingSkip.call(this, len);
+  }
+  blockingSkip(len) {
+    checkedLength(len);
+    if (!this.#open) {
+      closed();
+    }
+    if (this.handler.blockingSkip) {
+      return this.handler.blockingSkip.call(this, len);
+    }
+    const bytes = this.handler.blockingRead.call(this, len);
+    return BigInt(bytes.byteLength);
+  }
+  subscribe() {
+    if (!this.#open) {
+      return pollableCreate();
+    }
+    const pollable = this.handler.subscribe ? this.handler.subscribe.call(this) : pollableCreate();
+    if (pollable instanceof Pollable) {
+      this.#children.add(pollable);
+      pollable._onDispose(() => this.#children.delete(pollable));
+    }
+    return pollable;
+  }
+  [symbolDispose]() {
+    if (!this.#open) {
+      return;
+    }
+    this.#open = false;
+    for (const child of this.#children) {
+      child._invalidate();
+    }
+    this.#children.clear();
+    if (this.handler.drop) {
+      this.handler.drop.call(this);
+    }
+  }
+};
+var inputStreamCreate = InputStream._create;
+delete InputStream._create;
+var OutputStream = class _OutputStream {
+  id;
+  open;
+  handler;
+  #permit = 0n;
+  #children = /* @__PURE__ */ new Set();
+  static _create(handler) {
+    const stream = new _OutputStream();
+    if (!handler) {
+      console.trace("no handler");
+    }
+    stream.id = ++id;
+    stream.open = true;
+    stream.handler = handler;
+    return stream;
+  }
+  checkWrite() {
+    if (!this.open) {
+      closed();
+    }
+    if (this.handler.checkWrite) {
+      const permit = this.handler.checkWrite.call(this);
+      checkedLength(permit, "write permit");
+      this.#permit = permit;
+      return permit;
+    }
+    this.#permit = 1000000n;
+    return this.#permit;
+  }
+  write(buf) {
+    if (!this.open) {
+      closed();
+    }
+    if (BigInt(buf.byteLength) > this.#permit) {
+      throw new Error("write exceeds the permit returned by checkWrite");
+    }
+    this.#permit -= BigInt(buf.byteLength);
+    this.handler.write.call(this, buf);
+  }
+  blockingWriteAndFlush(buf) {
+    if (!this.open) {
+      closed();
+    }
+    if (buf.byteLength > 4096) {
+      throw new RangeError("blockingWriteAndFlush accepts at most 4096 bytes");
+    }
+    if (this.handler.blockingWriteAndFlush) {
+      return this.handler.blockingWriteAndFlush.call(this, buf);
+    }
+    this.handler.write.call(this, buf);
+    if (this.handler.blockingFlush) {
+      this.handler.blockingFlush.call(this);
+    } else {
+      this.handler.flush?.call(this);
+    }
+  }
+  flush() {
+    if (!this.open) {
+      closed();
+    }
+    this.#permit = 0n;
+    if (this.handler.flush) {
+      this.handler.flush.call(this);
+    }
+  }
+  blockingFlush() {
+    if (!this.open) {
+      closed();
+    }
+    if (this.handler.blockingFlush) {
+      this.handler.blockingFlush.call(this);
+    } else {
+      this.handler.flush?.call(this);
+    }
+  }
+  writeZeroes(len) {
+    const length = checkedLength(len);
+    if (len > this.#permit) {
+      throw new Error("write exceeds the permit returned by checkWrite");
+    }
+    this.write.call(this, new Uint8Array(length));
+  }
+  blockingWriteZeroesAndFlush(len) {
+    const length = checkedLength(len);
+    if (length > 4096) {
+      throw new RangeError("blockingWriteZeroesAndFlush accepts at most 4096 bytes");
+    }
+    this.blockingWriteAndFlush.call(this, new Uint8Array(length));
+  }
+  splice(src, len) {
+    const spliceLen = Math.min(checkedLength(len), Number(this.checkWrite.call(this)));
+    const bytes = src.read(BigInt(spliceLen));
+    this.write.call(this, bytes);
+    return BigInt(bytes.byteLength);
+  }
+  blockingSplice(src, len) {
+    const spliceLen = Math.min(checkedLength(len), Number(this.checkWrite.call(this)));
+    const bytes = src.blockingRead(BigInt(spliceLen));
+    this.write.call(this, bytes);
+    return BigInt(bytes.byteLength);
+  }
+  subscribe() {
+    if (!this.open) {
+      return pollableCreate();
+    }
+    const pollable = this.handler.subscribe ? this.handler.subscribe.call(this) : pollableCreate();
+    if (pollable instanceof Pollable) {
+      this.#children.add(pollable);
+      pollable._onDispose(() => this.#children.delete(pollable));
+    }
+    return pollable;
+  }
+  [symbolDispose]() {
+    if (!this.open) {
+      return;
+    }
+    this.open = false;
+    this.#permit = 0n;
+    for (const child of this.#children) {
+      child._invalidate();
+    }
+    this.#children.clear();
+    this.handler.drop?.call(this);
+  }
+};
+var outputStreamCreate = OutputStream._create;
+delete OutputStream._create;
+var error = {
+  Error: IoError
+};
+var streams = { InputStream, OutputStream };
+var Pollable = class _Pollable {
+  #source = { ready: () => true, wait: () => Promise.resolve() };
+  #invalid = false;
+  #disposed = false;
+  #wait = null;
+  #disposeCallbacks = [];
+  #wakeUnusable;
+  #unusable = new Promise((resolve) => this.#wakeUnusable = resolve);
+  static _create(source) {
+    const pollable = new _Pollable();
+    if (source instanceof Promise) {
+      let ready = false;
+      const wait = source.then(() => {
+        ready = true;
+      }, () => {
+        ready = true;
+      });
+      pollable.#source = { ready: () => ready, wait: () => wait };
+    } else if (source) {
+      pollable.#source = source;
+    }
+    return pollable;
+  }
+  ready() {
+    this.#assertUsable();
+    return this.#source.ready();
+  }
+  block() {
+    this.#assertUsable();
+    if (this.#source.ready()) {
+      return Promise.resolve();
+    }
+    if (!this.#wait) {
+      this.#wait = Promise.race([
+        Promise.resolve(this.#source.wait()),
+        this.#unusable.then(() => this.#assertUsable())
+      ]).finally(() => {
+        this.#wait = null;
+      });
+    }
+    return this.#wait;
+  }
+  _onDispose(callback) {
+    if (this.#disposed) {
+      callback();
+    } else {
+      this.#disposeCallbacks.push(callback);
+    }
+  }
+  _invalidate() {
+    if (this.#invalid || this.#disposed) {
+      return;
+    }
+    this.#invalid = true;
+    this.#wakeUnusable();
+  }
+  #assertUsable() {
+    if (this.#disposed) {
+      throw new Error("pollable has been disposed");
+    }
+    if (this.#invalid) {
+      throw new Error("pollable's parent resource has been disposed");
+    }
+  }
+  [symbolDispose]() {
+    if (this.#disposed) {
+      return;
+    }
+    this.#disposed = true;
+    this.#wakeUnusable();
+    for (const callback of this.#disposeCallbacks.splice(0)) {
+      callback();
+    }
+  }
+};
+var pollableCreate = Pollable._create;
+delete Pollable._create;
+
+// node_modules/@bytecodealliance/preview2-shim/dist/browser/config.js
+var _cwd = "/";
+function _getCwd() {
+  return _cwd;
+}
+
+// node_modules/@bytecodealliance/preview2-shim/dist/browser/environment.js
+var _env = [];
+var _args = [];
+var _cwd2 = "/";
+var environment = {
+  getEnvironment() {
+    return _env;
+  },
+  getArguments() {
+    return _args;
+  },
+  initialCwd() {
+    return _cwd2;
+  }
+};
+
+// node_modules/@bytecodealliance/preview2-shim/dist/browser/cli.js
+var symbolDispose2 = Symbol.dispose ?? /* @__PURE__ */ Symbol.for("dispose");
+var ComponentExit = class extends Error {
+  exitError = true;
+  code;
+  constructor(code) {
+    super(`Component exited ${code === 0 ? "successfully" : "with error"}`);
+    this.code = code;
+  }
+};
+var exit = {
+  exit(status) {
+    throw new ComponentExit(status.tag === "err" ? 1 : 0);
+  },
+  // @ts-expect-error - Available only wasi-cli v0.2.12
+  exitWithCode(code) {
+    throw new ComponentExit(code);
+  }
+};
+var stdinStream = inputStreamCreate({
+  blockingRead() {
+    throw { tag: "closed" };
+  },
+  subscribe() {
+    return pollableCreate();
+  },
+  [symbolDispose2]() {
+  }
+});
+function consoleStream(writeLine) {
+  const decoder = new TextDecoder();
+  let pending = "";
+  const emitCompleteLines = () => {
+    const lines = pending.split("\n");
+    pending = lines.pop();
+    for (const line of lines) {
+      writeLine(line.endsWith("\r") ? line.slice(0, -1) : line);
+    }
+  };
+  return {
+    write(contents) {
+      pending += decoder.decode(contents, { stream: true });
+      emitCompleteLines();
+    },
+    flush() {
+      pending += decoder.decode();
+      if (pending) {
+        writeLine(pending);
+      }
+      pending = "";
+    },
+    blockingFlush() {
+      this.flush?.();
+    },
+    drop() {
+      this.flush?.();
+    }
+  };
+}
+var stdoutStream = outputStreamCreate(consoleStream((line) => console.log(line)));
+var stderrStream = outputStreamCreate(consoleStream((line) => console.error(line)));
+var stdin = {
+  getStdin() {
+    return stdinStream;
+  }
+};
+var stdout = {
+  getStdout() {
+    return stdoutStream;
+  }
+};
+var stderr = {
+  getStderr() {
+    return stderrStream;
+  }
+};
+
+// node_modules/@bytecodealliance/preview2-shim/dist/browser/clocks.js
+var MAX_TIMEOUT_MS = 2147483647;
+function timeout(durationNs) {
+  let remainingMs = Number((durationNs + 999999n) / 1000000n);
+  return new Promise((resolve) => {
+    const next = () => {
+      if (remainingMs <= 0) {
+        resolve();
+        return;
+      }
+      const delay = Math.min(remainingMs, MAX_TIMEOUT_MS);
+      remainingMs -= delay;
+      setTimeout(next, delay);
+    };
+    next();
+  });
+}
+var monotonicClock = {
+  resolution() {
+    return BigInt(1e6);
+  },
+  now() {
+    return BigInt(Math.floor(performance.now() * 1e6));
+  },
+  subscribeInstant(instant) {
+    instant = checkedU64(instant, "instant");
+    const now2 = monotonicClock.now();
+    if (instant <= now2) {
+      return pollableCreate();
+    }
+    return monotonicClock.subscribeDuration(instant - now2);
+  },
+  subscribeDuration(duration) {
+    duration = checkedU64(duration, "duration");
+    if (duration === 0n) {
+      return pollableCreate();
+    }
+    return pollableCreate(timeout(duration));
+  }
+};
+var wallClock = {
+  now() {
+    let now2 = Date.now();
+    const seconds = BigInt(Math.floor(now2 / 1e3));
+    const nanoseconds = now2 % 1e3 * 1e6;
+    return { seconds, nanoseconds };
+  },
+  resolution() {
+    return { seconds: 0n, nanoseconds: 1e6 };
+  }
+};
+
+// node_modules/@bytecodealliance/preview2-shim/dist/browser/in-memory-filesystem.js
+var rootEntries = /* @__PURE__ */ new WeakSet();
+var timeZero = {
+  seconds: 0n,
+  nanoseconds: 0
+};
+function coerceToSafeIntegerNumber(obj) {
+  let n;
+  if (typeof obj === "number") {
+    n = obj;
+  } else if (typeof obj == "bigint") {
+    n = Number(obj);
+  } else {
+    throw new TypeError(`unexpected non-numeric type: ${obj}`);
+  }
+  if (n > Number.MAX_SAFE_INTEGER) {
+    throw new TypeError(`excessively large number: ${n}`);
+  }
+  return n;
+}
+var MAX_SYMLINK_DEPTH = 40;
+function resolveEntry(root, path, followFinal, allowMissingFinal = false) {
+  const directories = [root];
+  const pending = path.split("/").reverse();
+  let followed = 0;
+  while (pending.length) {
+    const parent = directories[directories.length - 1];
+    if (!parent.dir) {
+      throw "not-directory";
+    }
+    const name = pending.pop();
+    if (name === "" || name === ".") {
+      continue;
+    }
+    if (name === "..") {
+      if (directories.length === 1) {
+        throw "not-permitted";
+      }
+      directories.pop();
+      continue;
+    }
+    const entry2 = parent.dir[name];
+    const isFinal = pending.length === 0;
+    if (!entry2) {
+      if (isFinal && allowMissingFinal) {
+        return { entry: void 0, parent, name };
+      }
+      throw "no-entry";
+    }
+    if (entry2.symlink !== void 0 && (!isFinal || followFinal)) {
+      if (++followed > MAX_SYMLINK_DEPTH) {
+        throw "loop";
+      }
+      if (entry2.symlink.startsWith("/")) {
+        throw "not-permitted";
+      }
+      for (const segment of entry2.symlink.split("/").reverse()) {
+        pending.push(segment);
+      }
+      continue;
+    }
+    if (isFinal) {
+      return { entry: entry2, parent, name };
+    }
+    directories.push(entry2);
+  }
+  const entry = directories[directories.length - 1];
+  return { entry, parent: entry, name: "" };
+}
+function lookupPath(root, path) {
+  if (path === "." && rootEntries.has(root)) {
+    return _getCwd();
+  }
+  return path;
+}
+function getChildEntry(parentEntry, subpath, followFinal) {
+  return resolveEntry(parentEntry, lookupPath(parentEntry, subpath), !!followFinal).entry;
+}
+function getParentEntry(root, path) {
+  const segments = path.split("/").filter((segment) => segment !== "" && segment !== ".");
+  const name = segments.pop();
+  if (!name || name === "..") {
+    throw "invalid";
+  }
+  const parent = resolveEntry(root, segments.join("/"), true).entry;
+  if (!parent.dir) {
+    throw "not-directory";
+  }
+  return [parent, name];
+}
+function getSource(fileEntry) {
+  if (typeof fileEntry.source === "string") {
+    fileEntry.source = new TextEncoder().encode(fileEntry.source);
+  }
+  return fileEntry.source;
+}
+function describeEntry(entry) {
+  if (entry.symlink !== void 0) {
+    return {
+      type: "symbolic-link",
+      size: BigInt(new TextEncoder().encode(entry.symlink).byteLength)
+    };
+  }
+  if (entry.dir) {
+    return { type: "directory", size: 0n };
+  }
+  return { type: "regular-file", size: BigInt(getSource(entry).byteLength) };
+}
+function containsEntry(root, target) {
+  if (root === target) {
+    return true;
+  }
+  return root.dir ? Object.values(root.dir).some((entry) => containsEntry(entry, target)) : false;
+}
+var fileWriteBuffers = /* @__PURE__ */ new WeakMap();
+var nextEntryId = 0n;
+var entryMetadata = /* @__PURE__ */ new WeakMap();
+function metadata(entry) {
+  let value = entryMetadata.get(entry);
+  if (!value) {
+    value = { id: ++nextEntryId, version: 0n, linkCount: 1n };
+    entryMetadata.set(entry, value);
+  }
+  return value;
+}
+var fileLocks = /* @__PURE__ */ new WeakMap();
+function lockState(entry) {
+  let state = fileLocks.get(entry);
+  if (!state) {
+    state = { exclusiveHolder: null, sharedHolders: /* @__PURE__ */ new Set() };
+    fileLocks.set(entry, state);
+  }
+  return state;
+}
+var touchListeners = /* @__PURE__ */ new Set();
+function touch(entry) {
+  metadata(entry).version++;
+  for (const listener of touchListeners) {
+    listener(entry);
+  }
+}
+function getFileWriteBuffer(entry, source, requiredLength) {
+  let buffer = fileWriteBuffers.get(entry);
+  if (!buffer || buffer.buffer !== source.buffer || buffer.byteOffset !== source.byteOffset) {
+    buffer = source;
+  }
+  if (requiredLength <= buffer.byteLength) {
+    return buffer;
+  }
+  const newBuffer = new Uint8Array(Math.max(requiredLength, source.byteLength * 2));
+  newBuffer.set(source);
+  fileWriteBuffers.set(entry, newBuffer);
+  return newBuffer;
+}
+var DirectoryEntryStream = class _DirectoryEntryStream {
+  idx = 0;
+  entries = [];
+  static _create(entries) {
+    const stream = new _DirectoryEntryStream();
+    stream.entries = entries;
+    return stream;
+  }
+  readDirectoryEntry() {
+    if (this.idx === this.entries.length) {
+      return void 0;
+    }
+    const [name, entry] = this.entries[this.idx];
+    this.idx += 1;
+    return {
+      name,
+      type: describeEntry(entry).type
+    };
+  }
+};
+var descriptorEntryStreamCreate = DirectoryEntryStream._create;
+delete DirectoryEntryStream._create;
+var Descriptor = class _Descriptor {
+  #stream;
+  #entry;
+  #flags = {
+    read: true,
+    write: true,
+    mutateDirectory: true
+  };
+  #advice = "normal";
+  _getEntry(descriptor) {
+    return descriptor.#entry;
+  }
+  static _create(entry, isStream) {
+    const descriptor = new _Descriptor();
+    if (isStream) {
+      descriptor.#stream = entry;
+    } else {
+      descriptor.#entry = entry;
+    }
+    return descriptor;
+  }
+  readViaStream(_offset) {
+    const source = getSource(this.#entry);
+    let offset = Number(_offset);
+    return inputStreamCreate({
+      blockingRead(len) {
+        if (offset === source.byteLength) {
+          throw { tag: "closed" };
+        }
+        const bytes = source.slice(offset, offset + Number(len));
+        offset += bytes.byteLength;
+        return bytes;
+      }
+    });
+  }
+  writeViaStream(_offset) {
+    const entry = this.#entry;
+    let offset = coerceToSafeIntegerNumber(_offset);
+    return outputStreamCreate({
+      write(buf) {
+        if (buf.byteLength === 0) {
+          return;
+        }
+        const source = getSource(entry);
+        const end = offset + buf.byteLength;
+        if (!Number.isSafeInteger(end)) {
+          throw new TypeError(`excessively large number: ${end}`);
+        }
+        const buffer = getFileWriteBuffer(entry, source, end);
+        if (offset > source.byteLength) {
+          buffer.fill(0, source.byteLength, offset);
+        }
+        buffer.set(buf, offset);
+        entry.source = buffer.subarray(0, Math.max(source.byteLength, end));
+        offset = end;
+        touch(entry);
+      }
+    });
+  }
+  appendViaStream() {
+    return this.writeViaStream(this.stat().size);
+  }
+  advise(_offset, _length, advice) {
+    if (this.getType() === "directory") {
+      throw "bad-descriptor";
+    }
+    this.#advice = advice;
+  }
+  syncData() {
+  }
+  getFlags() {
+    return { ...this.#flags };
+  }
+  getType() {
+    if (this.#stream) {
+      return "fifo";
+    }
+    if (this.#entry.symlink !== void 0) {
+      return "symbolic-link";
+    }
+    if (this.#entry.dir) {
+      return "directory";
+    }
+    if (this.#entry.source) {
+      return "regular-file";
+    }
+    return "unknown";
+  }
+  setSize(size) {
+    if (this.getType() === "directory") {
+      throw "is-directory";
+    }
+    const length = coerceToSafeIntegerNumber(size);
+    const source = getSource(this.#entry);
+    const resized = new Uint8Array(length);
+    resized.set(source.subarray(0, length));
+    this.#entry.source = resized;
+    touch(this.#entry);
+  }
+  setTimes(dataAccessTimestamp, dataModificationTimestamp) {
+    if (dataAccessTimestamp?.tag !== "no-change" || dataModificationTimestamp?.tag !== "no-change") {
+      touch(this.#entry);
+    }
+  }
+  read(length, offset) {
+    const source = getSource(this.#entry);
+    const off = coerceToSafeIntegerNumber(offset);
+    const len = coerceToSafeIntegerNumber(length);
+    const result = [
+      source.slice(off, off + len),
+      off + len >= source.byteLength
+    ];
+    return result;
+  }
+  write(buffer, offset) {
+    if (this.getType() === "directory") {
+      throw "is-directory";
+    }
+    const off = coerceToSafeIntegerNumber(offset);
+    const source = getSource(this.#entry);
+    const end = off + buffer.byteLength;
+    if (!Number.isSafeInteger(end)) {
+      throw "file-too-large";
+    }
+    const target = new Uint8Array(Math.max(source.byteLength, end));
+    target.set(source);
+    target.set(buffer, off);
+    this.#entry.source = target;
+    touch(this.#entry);
+    return BigInt(buffer.byteLength);
+  }
+  readDirectory() {
+    if (!this.#entry?.dir) {
+      throw "bad-descriptor";
+    }
+    return descriptorEntryStreamCreate(Object.entries(this.#entry.dir).sort(([a], [b]) => a > b ? 1 : -1));
+  }
+  sync() {
+  }
+  createDirectoryAt(path) {
+    try {
+      getChildEntry(this.#entry, path, false);
+      throw "exist";
+    } catch (error2) {
+      if (error2 !== "no-entry") {
+        throw error2;
+      }
+    }
+    const [parent, name] = getParentEntry(this.#entry, path);
+    parent.dir[name] = { dir: {} };
+    touch(parent);
+  }
+  stat() {
+    const { type, size } = describeEntry(this.#entry);
+    return {
+      type,
+      linkCount: metadata(this.#entry).linkCount,
+      size,
+      dataAccessTimestamp: timeZero,
+      dataModificationTimestamp: timeZero,
+      statusChangeTimestamp: timeZero
+    };
+  }
+  statAt(pathFlags, path) {
+    const entry = getChildEntry(this.#entry, path, pathFlags.symlinkFollow);
+    const { type, size } = describeEntry(entry);
+    return {
+      type,
+      linkCount: metadata(entry).linkCount,
+      size,
+      dataAccessTimestamp: timeZero,
+      dataModificationTimestamp: timeZero,
+      statusChangeTimestamp: timeZero
+    };
+  }
+  setTimesAt(pathFlags, path, _atime, mtime) {
+    const entry = getChildEntry(this.#entry, path, pathFlags.symlinkFollow);
+    if (mtime?.tag !== "no-change") {
+      fileWriteBuffers.delete(entry);
+      touch(entry);
+    }
+  }
+  linkAt(oldPathFlags, oldPath, newDescriptor, newPath) {
+    const entry = getChildEntry(this.#entry, oldPath, oldPathFlags.symlinkFollow);
+    if (entry.dir) {
+      throw "not-permitted";
+    }
+    const [newParent, newName] = getParentEntry(descriptorGetEntry(unwrapDescriptor(newDescriptor)), newPath);
+    if (newParent.dir[newName]) {
+      throw "exist";
+    }
+    newParent.dir[newName] = entry;
+    metadata(entry).linkCount++;
+    touch(newParent);
+  }
+  openAt(pathFlags, path, openFlags, _flags) {
+    const exclusiveCreate = !!(openFlags.create && openFlags.exclusive);
+    const resolved = resolveEntry(this.#entry, lookupPath(this.#entry, path), !!pathFlags.symlinkFollow && !exclusiveCreate, !!openFlags.create);
+    let childEntry = resolved.entry;
+    if (childEntry && exclusiveCreate) {
+      throw "exist";
+    }
+    if (!childEntry) {
+      const { parent, name } = resolved;
+      childEntry = parent.dir[name] = openFlags.directory ? { dir: {} } : { source: new Uint8Array() };
+      touch(parent);
+    }
+    if (childEntry.symlink !== void 0) {
+      throw "loop";
+    }
+    if (openFlags.directory && !childEntry.dir) {
+      throw "not-directory";
+    }
+    if (openFlags.truncate) {
+      if (childEntry.dir) {
+        throw "is-directory";
+      }
+      childEntry.source = new Uint8Array();
+      touch(childEntry);
+    }
+    return descriptorCreate(childEntry);
+  }
+  readlinkAt(path) {
+    const entry = getChildEntry(this.#entry, path, false);
+    if (entry.symlink === void 0) {
+      throw "invalid";
+    }
+    if (entry.symlink.startsWith("/")) {
+      throw "not-permitted";
+    }
+    return entry.symlink;
+  }
+  removeDirectoryAt(path) {
+    const [parent, name] = getParentEntry(this.#entry, path);
+    const entry = parent.dir?.[name];
+    if (!entry) {
+      throw "no-entry";
+    }
+    if (!entry.dir) {
+      throw "not-directory";
+    }
+    if (Object.keys(entry.dir).length) {
+      throw "not-empty";
+    }
+    delete parent.dir[name];
+    metadata(entry).linkCount--;
+    touch(parent);
+  }
+  renameAt(oldPath, newDescriptor, newPath) {
+    const [oldParent, oldName] = getParentEntry(this.#entry, oldPath);
+    const entry = oldParent.dir?.[oldName];
+    if (!entry) {
+      throw "no-entry";
+    }
+    const [newParent, newName] = getParentEntry(descriptorGetEntry(unwrapDescriptor(newDescriptor)), newPath);
+    const replaced = newParent.dir[newName];
+    if (oldParent === newParent && oldName === newName || replaced === entry) {
+      return;
+    }
+    if (entry.dir && containsEntry(entry, newParent)) {
+      throw "invalid";
+    }
+    if (replaced) {
+      if (entry.dir && !replaced.dir) {
+        throw "not-directory";
+      }
+      if (!entry.dir && replaced.dir) {
+        throw "is-directory";
+      }
+      if (replaced.dir && Object.keys(replaced.dir).length > 0) {
+        throw "not-empty";
+      }
+      metadata(replaced).linkCount--;
+    }
+    newParent.dir[newName] = entry;
+    delete oldParent.dir[oldName];
+    touch(oldParent);
+    if (newParent !== oldParent) {
+      touch(newParent);
+    }
+  }
+  symlinkAt(oldPath, newPath) {
+    if (oldPath.startsWith("/")) {
+      throw "not-permitted";
+    }
+    const [parent, name] = getParentEntry(this.#entry, newPath);
+    if (parent.dir[name]) {
+      throw "exist";
+    }
+    parent.dir[name] = { symlink: oldPath };
+    touch(parent);
+  }
+  unlinkFileAt(path) {
+    const [parent, name] = getParentEntry(this.#entry, path);
+    const entry = parent.dir?.[name];
+    if (!entry) {
+      throw "no-entry";
+    }
+    if (entry.dir) {
+      throw "is-directory";
+    }
+    delete parent.dir[name];
+    metadata(entry).linkCount--;
+    touch(parent);
+  }
+  isSameObject(other) {
+    return descriptorGetEntry(unwrapDescriptor(other)) === this.#entry;
+  }
+  metadataHash() {
+    const value = metadata(this.#entry);
+    return { upper: value.id, lower: value.version };
+  }
+  metadataHashAt(pathFlags, path) {
+    const value = metadata(getChildEntry(this.#entry, path, pathFlags.symlinkFollow));
+    return { upper: value.id, lower: value.version };
+  }
+  /**
+   * Default advisory-locking implementation: a same-process reader/writer lock
+   * keyed on the underlying entry. There's no real contention to wait out in a
+   * single-threaded environment, so `lockShared`/`lockExclusive` don't block -
+   * they throw `would-block` immediately when the lock isn't free, same as the
+   * `tryLock*` variants report `false`.
+   */
+  tryLockShared() {
+    const state = lockState(this.#entry);
+    if (state.exclusiveHolder && state.exclusiveHolder !== this) {
+      return false;
+    }
+    state.sharedHolders.add(this);
+    return true;
+  }
+  tryLockExclusive() {
+    const state = lockState(this.#entry);
+    if (state.exclusiveHolder && state.exclusiveHolder !== this) {
+      return false;
+    }
+    const otherReaders = state.sharedHolders.size - (state.sharedHolders.has(this) ? 1 : 0);
+    if (otherReaders > 0) {
+      return false;
+    }
+    state.sharedHolders.delete(this);
+    state.exclusiveHolder = this;
+    return true;
+  }
+  lockShared() {
+    if (!this.tryLockShared()) {
+      throw "would-block";
+    }
+  }
+  lockExclusive() {
+    if (!this.tryLockExclusive()) {
+      throw "would-block";
+    }
+  }
+  unlock() {
+    const state = fileLocks.get(this.#entry);
+    if (!state) {
+      return;
+    }
+    state.sharedHolders.delete(this);
+    if (state.exclusiveHolder === this) {
+      state.exclusiveHolder = null;
+    }
+  }
+};
+var descriptorGetEntry = Descriptor.prototype._getEntry;
+delete Descriptor.prototype._getEntry;
+var descriptorCreate = Descriptor._create;
+delete Descriptor._create;
+var UNWRAP_DESCRIPTOR = /* @__PURE__ */ Symbol("browserFilesystemDescriptor.unwrap");
+function unwrapDescriptor(descriptor) {
+  let current = descriptor;
+  for (; ; ) {
+    const inner = current[UNWRAP_DESCRIPTOR];
+    if (!inner || inner === current) {
+      return current;
+    }
+    current = inner;
+  }
+}
+var InMemoryFilesystemAdapter = class {
+  getRoot(capability) {
+    if (!capability.dir) {
+      throw new TypeError("an in-memory preopen root must be a directory");
+    }
+    rootEntries.add(capability);
+    return descriptorCreate(capability);
+  }
+};
+
+// node_modules/@bytecodealliance/preview2-shim/dist/browser/filesystem.js
+var DirectoryEntryStream2 = class _DirectoryEntryStream {
+  #implementation;
+  static _create(implementation) {
+    const stream = new _DirectoryEntryStream();
+    stream.#implementation = implementation;
+    return stream;
+  }
+  readDirectoryEntry() {
+    return this.#implementation.readDirectoryEntry();
+  }
+};
+var directoryEntryStreamCreate = DirectoryEntryStream2._create;
+delete DirectoryEntryStream2._create;
+var Descriptor2 = class _Descriptor {
+  #implementation;
+  _getImplementation(descriptor) {
+    return descriptor.#implementation;
+  }
+  static _create(implementation) {
+    const descriptor = new _Descriptor();
+    descriptor.#implementation = implementation;
+    return descriptor;
+  }
+  readViaStream(offset) {
+    return this.#implementation.readViaStream(offset);
+  }
+  writeViaStream(offset) {
+    return this.#implementation.writeViaStream(offset);
+  }
+  appendViaStream() {
+    return this.#implementation.appendViaStream();
+  }
+  advise(offset, length, advice) {
+    return this.#implementation.advise(offset, length, advice);
+  }
+  syncData() {
+    return this.#implementation.syncData();
+  }
+  getFlags() {
+    return this.#implementation.getFlags();
+  }
+  getType() {
+    return this.#implementation.getType();
+  }
+  setSize(size) {
+    return this.#implementation.setSize(size);
+  }
+  setTimes(dataAccessTimestamp, dataModificationTimestamp) {
+    return this.#implementation.setTimes(dataAccessTimestamp, dataModificationTimestamp);
+  }
+  read(length, offset) {
+    return this.#implementation.read(length, offset);
+  }
+  write(buffer, offset) {
+    return this.#implementation.write(buffer, offset);
+  }
+  readDirectory() {
+    return directoryEntryStreamCreate(this.#implementation.readDirectory());
+  }
+  sync() {
+    return this.#implementation.sync();
+  }
+  createDirectoryAt(path) {
+    return this.#implementation.createDirectoryAt(path);
+  }
+  stat() {
+    return this.#implementation.stat();
+  }
+  statAt(pathFlags, path) {
+    return this.#implementation.statAt(pathFlags, path);
+  }
+  setTimesAt(pathFlags, path, dataAccessTimestamp, dataModificationTimestamp) {
+    return this.#implementation.setTimesAt(pathFlags, path, dataAccessTimestamp, dataModificationTimestamp);
+  }
+  linkAt(oldPathFlags, oldPath, newDescriptor, newPath) {
+    return this.#implementation.linkAt(oldPathFlags, oldPath, descriptorGetImplementation(newDescriptor), newPath);
+  }
+  openAt(pathFlags, path, openFlags, flags) {
+    return descriptorCreate2(this.#implementation.openAt(pathFlags, path, openFlags, flags));
+  }
+  readlinkAt(path) {
+    return this.#implementation.readlinkAt(path);
+  }
+  removeDirectoryAt(path) {
+    return this.#implementation.removeDirectoryAt(path);
+  }
+  renameAt(oldPath, newDescriptor, newPath) {
+    return this.#implementation.renameAt(oldPath, descriptorGetImplementation(newDescriptor), newPath);
+  }
+  symlinkAt(oldPath, newPath) {
+    return this.#implementation.symlinkAt(oldPath, newPath);
+  }
+  unlinkFileAt(path) {
+    return this.#implementation.unlinkFileAt(path);
+  }
+  isSameObject(other) {
+    return this.#implementation.isSameObject(descriptorGetImplementation(other));
+  }
+  metadataHash() {
+    return this.#implementation.metadataHash();
+  }
+  metadataHashAt(pathFlags, path) {
+    return this.#implementation.metadataHashAt(pathFlags, path);
+  }
+  lockShared() {
+    return this.#implementation.lockShared?.();
+  }
+  lockExclusive() {
+    return this.#implementation.lockExclusive?.();
+  }
+  tryLockShared() {
+    return this.#implementation.tryLockShared?.() ?? false;
+  }
+  tryLockExclusive() {
+    return this.#implementation.tryLockExclusive?.() ?? false;
+  }
+  unlock() {
+    return this.#implementation.unlock?.();
+  }
+};
+var descriptorGetImplementation = Descriptor2.prototype._getImplementation;
+delete Descriptor2.prototype._getImplementation;
+var descriptorCreate2 = Descriptor2._create;
+delete Descriptor2._create;
+var defaultAdapter = new InMemoryFilesystemAdapter();
+var _preopens = [];
+var preopens = {
+  getDirectories() {
+    return _preopens;
+  }
+};
+var types = {
+  Descriptor: Descriptor2,
+  DirectoryEntryStream: DirectoryEntryStream2,
+  filesystemErrorCode: (err) => {
+    let message;
+    if ("payload" in err) {
+      message = err.payload;
+    } else if ("message" in err) {
+      message = err.message;
+    }
+    return convertFsError(message);
+  }
+};
+function convertFsError(e) {
+  switch (e.code) {
+    case "EACCES":
+      return "access";
+    case "EAGAIN":
+    case "EWOULDBLOCK":
+      return "would-block";
+    case "EALREADY":
+      return "already";
+    case "EBADF":
+      return "bad-descriptor";
+    case "EBUSY":
+      return "busy";
+    case "EDEADLK":
+      return "deadlock";
+    case "EDQUOT":
+      return "quota";
+    case "EEXIST":
+      return "exist";
+    case "EFBIG":
+      return "file-too-large";
+    case "EILSEQ":
+      return "illegal-byte-sequence";
+    case "EINPROGRESS":
+      return "in-progress";
+    case "EINTR":
+      return "interrupted";
+    case "EINVAL":
+      return "invalid";
+    case "EIO":
+      return "io";
+    case "EISDIR":
+      return "is-directory";
+    case "ELOOP":
+      return "loop";
+    case "EMLINK":
+      return "too-many-links";
+    case "EMSGSIZE":
+      return "message-size";
+    case "ENAMETOOLONG":
+      return "name-too-long";
+    case "ENODEV":
+      return "no-device";
+    case "ENOENT":
+      return "no-entry";
+    case "ENOLCK":
+      return "no-lock";
+    case "ENOMEM":
+      return "insufficient-memory";
+    case "ENOSPC":
+      return "insufficient-space";
+    case "ENOTDIR":
+    case "ERR_FS_EISDIR":
+      return "not-directory";
+    case "ENOTEMPTY":
+      return "not-empty";
+    case "ENOTRECOVERABLE":
+      return "not-recoverable";
+    case "ENOTSUP":
+      return "unsupported";
+    case "ENOTTY":
+      return "no-tty";
+    // windows gives this error for badly structured `//` reads
+    // this seems like a slightly better error than unknown given
+    // that it's a common footgun
+    case -4094:
+    case "ENXIO":
+      return "no-such-device";
+    case "EOVERFLOW":
+      return "overflow";
+    case "EPERM":
+      return "not-permitted";
+    case "EPIPE":
+      return "pipe";
+    case "EROFS":
+      return "read-only";
+    case "ESPIPE":
+      return "invalid-seek";
+    case "ETXTBSY":
+      return "text-file-busy";
+    case "EXDEV":
+      return "cross-device";
+    case "UNKNOWN":
+      switch (e.errno) {
+        case -4094:
+          return "no-such-device";
+        default:
+          throw e;
+      }
+    default:
+      throw e;
+  }
+}
+
+// node_modules/@bytecodealliance/preview2-shim/dist/browser/random.js
+var MAX_BYTES = 65536;
+var insecureRandomValue1;
+var insecureRandomValue2;
+var random = {
+  getRandomBytes(len) {
+    const byteLength = checkedU64AsNumber(len, "random byte length");
+    const bytes = new Uint8Array(byteLength);
+    if (byteLength > MAX_BYTES) {
+      for (let generated = 0; generated < byteLength; generated += MAX_BYTES) {
+        crypto.getRandomValues(bytes.subarray(generated, generated + MAX_BYTES));
+      }
+    } else {
+      crypto.getRandomValues(bytes);
+    }
+    return bytes;
+  },
+  getRandomU64() {
+    return crypto.getRandomValues(new BigUint64Array(1))[0];
+  },
+  // @ts-expect-error Not defined in WIT
+  insecureRandom() {
+    if (insecureRandomValue1 === void 0 || insecureRandomValue2 === void 0) {
+      insecureRandomValue1 = random.getRandomU64();
+      insecureRandomValue2 = random.getRandomU64();
+    }
+    return [insecureRandomValue1, insecureRandomValue2];
+  }
+};
+
 // src/wasm/protocol.js
+var { getEnvironment } = environment;
+if (getEnvironment === void 0) {
+  const err = new Error("unexpectedly undefined local import 'getEnvironment', was 'getEnvironment' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var { exit: exit2 } = exit;
+if (exit2 === void 0) {
+  const err = new Error("unexpectedly undefined local import 'exit', was 'exit' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var { getStderr } = stderr;
+if (getStderr === void 0) {
+  const err = new Error("unexpectedly undefined local import 'getStderr', was 'getStderr' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var { getStdin } = stdin;
+if (getStdin === void 0) {
+  const err = new Error("unexpectedly undefined local import 'getStdin', was 'getStdin' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var { getStdout } = stdout;
+if (getStdout === void 0) {
+  const err = new Error("unexpectedly undefined local import 'getStdout', was 'getStdout' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var { now } = monotonicClock;
+if (now === void 0) {
+  const err = new Error("unexpectedly undefined local import 'now', was 'now' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var { now: now$1 } = wallClock;
+if (now$1 === void 0) {
+  const err = new Error("unexpectedly undefined local import 'now$1', was 'now' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var { getDirectories } = preopens;
+if (getDirectories === void 0) {
+  const err = new Error("unexpectedly undefined local import 'getDirectories', was 'getDirectories' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var {
+  Descriptor: Descriptor3,
+  filesystemErrorCode
+} = types;
+if (Descriptor3 === void 0) {
+  const err = new Error("unexpectedly undefined local import 'Descriptor', was 'Descriptor' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+if (filesystemErrorCode === void 0) {
+  const err = new Error("unexpectedly undefined local import 'filesystemErrorCode', was 'filesystemErrorCode' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var { Error: Error$1 } = error;
+if (Error$1 === void 0) {
+  const err = new Error("unexpectedly undefined local import 'Error$1', was 'Error' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var {
+  InputStream: InputStream2,
+  OutputStream: OutputStream2
+} = streams;
+if (InputStream2 === void 0) {
+  const err = new Error("unexpectedly undefined local import 'InputStream', was 'InputStream' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+if (OutputStream2 === void 0) {
+  const err = new Error("unexpectedly undefined local import 'OutputStream', was 'OutputStream' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
+var { getRandomBytes } = random;
+if (getRandomBytes === void 0) {
+  const err = new Error("unexpectedly undefined local import 'getRandomBytes', was 'getRandomBytes' available at instantiation?");
+  console.error("ERROR:", err.toString());
+  throw err;
+}
 var dv = new DataView(new ArrayBuffer());
 var dataView = (mem) => dv.buffer === mem.buffer ? dv : dv = new DataView(mem.buffer);
+function toUint64(val) {
+  const converted = BigInt(val);
+  return BigInt.asUintN(64, converted);
+}
+function toUint16(val) {
+  val >>>= 0;
+  val %= 2 ** 16;
+  return val;
+}
+function toUint32(val) {
+  return val >>> 0;
+}
+function toUint8(val) {
+  val >>>= 0;
+  val %= 2 ** 8;
+  return val;
+}
 function _isValidNumericPrimitive(ty, v) {
   if (v === void 0 || v === null) {
     return false;
@@ -43,11 +1454,116 @@ function _requireValidNumericPrimitive(ty, v) {
   }
   return true;
 }
-var RESOURCE_SCOPE_ID = 0;
+var isLE = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+function _utf16AllocateAndEncode(str, realloc, memory) {
+  const len = str.length;
+  const ptr = realloc(0, 0, 2, len * 2);
+  const out = new Uint16Array(memory.buffer, ptr, len);
+  let i = 0;
+  if (isLE) {
+    while (i < len) {
+      out[i] = str.charCodeAt(i++);
+    }
+  } else {
+    while (i < len) {
+      const ch = str.charCodeAt(i);
+      out[i++] = (ch & 255) << 8 | ch >>> 8;
+    }
+  }
+  return { ptr, len, codepoints: [...str].length };
+}
+var TEXT_DECODER_UTF8 = new TextDecoder();
+var TEXT_ENCODER_UTF8 = new TextEncoder();
+function _utf8AllocateAndEncode(s, realloc, memory) {
+  if (typeof s !== "string") {
+    throw new TypeError("expected a string, received [" + typeof s + "]");
+  }
+  if (s.length === 0) {
+    return { ptr: 1, len: 0 };
+  }
+  let len = 0;
+  let codepoints = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    codepoints++;
+    if (ch < 128) {
+      len += 1;
+    } else if (ch < 2048) {
+      len += 2;
+    } else if (ch >= 55296 && ch <= 56319 && i + 1 < s.length && (s.charCodeAt(i + 1) & 64512) === 56320) {
+      len += 4;
+      i++;
+    } else {
+      len += 3;
+    }
+  }
+  const ptr = realloc(0, 0, 1, len);
+  const { read, written } = TEXT_ENCODER_UTF8.encodeInto(
+    s,
+    new Uint8Array(memory.buffer, ptr, len)
+  );
+  if (read !== s.length || written !== len) {
+    throw new Error("failed to encode whole string");
+  }
+  const res = { ptr, len, codepoints };
+  return res;
+}
+var T_FLAG = 1 << 30;
+function rscTableCreateOwn(table, rep2) {
+  const free = table[0] & ~T_FLAG;
+  table._createdReps.add(rep2);
+  if (free === 0) {
+    table.push(0);
+    table.push(rep2 | T_FLAG);
+    return (table.length >> 1) - 1;
+  }
+  table[0] = table[free << 1];
+  table[free << 1] = 0;
+  table[(free << 1) + 1] = rep2 | T_FLAG;
+  return free;
+}
 var RESOURCE_SCOPE_TASKS = /* @__PURE__ */ new Map();
+var WebAssemblyRuntimeError = WebAssembly.RuntimeError;
+function rscTableRemove(table, handle) {
+  const scope = table[handle << 1];
+  const val = table[(handle << 1) + 1];
+  const own = (val & T_FLAG) !== 0;
+  const rep2 = val & ~T_FLAG;
+  if (val === 0 || (scope & T_FLAG) !== 0) {
+    throw new WebAssemblyRuntimeError(`unknown handle index ${(handle << 1) + 1}`);
+  }
+  if (own && scope !== 0) {
+    throw new WebAssemblyRuntimeError("cannot remove owned resource while borrowed");
+  }
+  const borrowTask = own ? void 0 : RESOURCE_SCOPE_TASKS.get(scope);
+  table[handle << 1] = table[0] | T_FLAG;
+  table[0] = handle | T_FLAG;
+  borrowTask?.removeBorrowedHandle();
+  return { rep: rep2, scope, own };
+}
+var RESOURCE_SCOPE_ID = 0;
+var curResourceBorrows = [];
 var ASYNC_TASKS_BY_COMPONENT_IDX = /* @__PURE__ */ new Map();
-var ASYNC_CURRENT_TASK_IDS = [];
 var ASYNC_CURRENT_COMPONENT_IDXS = [];
+function getCurrentTask(componentIdx2, taskID) {
+  let usedGlobal = false;
+  if (componentIdx2 === void 0 || componentIdx2 === null) {
+    throw new Error("missing component idx");
+  }
+  const taskMetas = ASYNC_TASKS_BY_COMPONENT_IDX.get(componentIdx2);
+  if (taskMetas === void 0 || taskMetas.length === 0) {
+    return void 0;
+  }
+  if (taskID) {
+    return taskMetas.find((meta) => meta.task.id() === taskID);
+  }
+  const taskMeta = taskMetas[taskMetas.length - 1];
+  if (!taskMeta || !taskMeta.task) {
+    return void 0;
+  }
+  return taskMeta;
+}
+var ASYNC_CURRENT_TASK_IDS = [];
 var _debugLog = (...args) => {
   if (!globalThis?.process?.env?.JCO_DEBUG) {
     return;
@@ -212,7 +1728,6 @@ var Waitable = class {
 var INSTANCE_FLAGS = /* @__PURE__ */ new Map();
 var STORE_TRAP = { error: null };
 var STORE_ASYNC_STATE = { deadlockCheck: null, pendingHostOperations: 0 };
-var WebAssemblyRuntimeError = WebAssembly.RuntimeError;
 function _checkForDeadlock() {
   if (STORE_ASYNC_STATE.deadlockCheck !== null || STORE_TRAP.error !== null) {
     return;
@@ -2330,7 +3845,856 @@ function createNewCurrentTask(args) {
   }
   return [newTask, newTaskID];
 }
+function _checkMayLeave(componentIdx2) {
+  if (INSTANCE_FLAGS.get(componentIdx2)?.value !== 1) {
+    throw new WebAssemblyRuntimeError("cannot leave component instance");
+  }
+}
+function _getGlobalCurrentTaskMeta(componentIdx2) {
+  const v = componentIdx2 === void 0 || componentIdx2 === null ? CURRENT_TASK_META.current : CURRENT_TASK_META[componentIdx2];
+  if (v === void 0 || v === null) {
+    return void 0;
+  }
+  return { ...v };
+}
+function _setGlobalCurrentTaskMeta(args) {
+  if (!args) {
+    throw new TypeError("args missing");
+  }
+  if (args.taskID === void 0) {
+    throw new TypeError("missing task ID");
+  }
+  if (args.componentIdx === void 0) {
+    throw new TypeError("missing component idx");
+  }
+  const { taskID, componentIdx: componentIdx2 } = args;
+  return CURRENT_TASK_META.current = CURRENT_TASK_META[componentIdx2] = { taskID, componentIdx: componentIdx2 };
+}
+async function _clearCurrentTask(args) {
+  _debugLog("[_clearCurrentTask()] args", args);
+  if (!args) {
+    throw new TypeError("args missing");
+  }
+  if (args.taskID === void 0) {
+    throw new TypeError("missing task ID");
+  }
+  if (args.componentIdx === void 0) {
+    throw new TypeError("missing component idx");
+  }
+  const { taskID, componentIdx: componentIdx2 } = args;
+  const meta = CURRENT_TASK_META[componentIdx2];
+  if (!meta) {
+    throw new Error(`missing current task meta for component idx [${componentIdx2}]`);
+  }
+  if (meta.taskID !== taskID) {
+    throw new Error(`task ID [${meta.taskID}] != requested ID [${taskID}]`);
+  }
+  if (meta.componentIdx !== componentIdx2) {
+    throw new Error(`component idx [${meta.componentIdx}] != requested idx [${componentIdx2}]`);
+  }
+  CURRENT_TASK_META[componentIdx2] = null;
+  if (CURRENT_TASK_META.current?.taskID === taskID) {
+    CURRENT_TASK_META.current = null;
+  }
+}
+function _lowerImportBackwardsCompat(args) {
+  const params = [...arguments].slice(1);
+  _debugLog("[_lowerImportBackwardsCompat()] args", { args, params });
+  const {
+    functionIdx,
+    componentIdx: componentIdx2,
+    isAsync,
+    isManualAsync,
+    paramLiftFns,
+    resultLowerFns,
+    hasResultPointer,
+    funcTypeIsAsync,
+    metadata: metadata2,
+    memoryIdx,
+    getMemoryFn,
+    getReallocFn,
+    importFn,
+    stringEncoding
+  } = args;
+  _checkMayLeave(componentIdx2);
+  let meta = _getGlobalCurrentTaskMeta(componentIdx2);
+  let createdTask;
+  if (!meta) {
+    if (funcTypeIsAsync || isAsync && !isManualAsync) {
+      throw new Error("p3 async wasm exports cannot use backwards compat auto-task init");
+    }
+    const [newTask, newTaskID] = createNewCurrentTask({
+      componentIdx: componentIdx2,
+      isAsync,
+      isManualAsync,
+      callingWasmExport: false
+    });
+    createdTask = newTask;
+    createdTask.registerOnResolveHandler(() => {
+      _clearCurrentTask({
+        taskID: task.id(),
+        componentIdx: task.componentIdx()
+      });
+    });
+    _setGlobalCurrentTaskMeta({
+      componentIdx: componentIdx2,
+      taskID: newTaskID
+    });
+    meta = _getGlobalCurrentTaskMeta(componentIdx2);
+  }
+  const { taskID } = meta;
+  const taskMeta = getCurrentTask(componentIdx2, taskID);
+  if (!taskMeta) {
+    throw new Error("invalid/missing async task meta");
+  }
+  const task = taskMeta.task;
+  if (!task) {
+    throw new Error("invalid/missing async task");
+  }
+  const cstate = getOrCreateAsyncState(componentIdx2);
+  if (!task.mayBlock() && funcTypeIsAsync && !isAsync) {
+    throw new Error("non async exports cannot synchronously call async functions");
+  }
+  const memory = getMemoryFn();
+  const resultPtr = hasResultPointer ? params[params.length - 1] : void 0;
+  const subtask = task.createSubtask({
+    componentIdx: componentIdx2,
+    parentTask: task,
+    fnName: importFn.fnName,
+    isAsync,
+    isManualAsync,
+    callMetadata: {
+      memoryIdx,
+      memory,
+      realloc: getReallocFn?.(),
+      getReallocFn,
+      resultPtr,
+      lowers: resultLowerFns,
+      funcTypeIsAsync,
+      stringEncoding
+    }
+  });
+  task.setReturnMemoryIdx(memoryIdx);
+  task.setReturnMemory(getMemoryFn());
+  subtask.onStart();
+  if (!isManualAsync && !isAsync && !funcTypeIsAsync) {
+    if (createdTask) {
+      createdTask.enterSync();
+    }
+    const res = importFn(...params);
+    if (!funcTypeIsAsync && !subtask.isReturned()) {
+      throw new Error("post-execution subtasks must either be async or returned");
+    }
+    const syncRes = subtask.getResult();
+    if (createdTask) {
+      createdTask.resolve([syncRes]);
+    }
+    return syncRes;
+  }
+  if (!isManualAsync && !isAsync && funcTypeIsAsync) {
+    const { promise, resolve, reject } = promiseWithResolvers();
+    queueMicrotask(async () => {
+      try {
+        await importFn(...params);
+        if (!subtask.isResolved()) {
+          await task.suspendUntil({ readyFn: () => subtask.isResolved() });
+        }
+        resolve(subtask.getResult());
+      } catch (err) {
+        reject(err);
+      }
+    });
+    return promise;
+  }
+  const subtaskState = subtask.getStateNumber();
+  if (subtaskState < 0 || subtaskState >= 2 ** 4) {
+    throw new Error("invalid subtask state, out of valid range");
+  }
+  subtask.setOnProgressFn(() => {
+    subtask.setPendingEvent(() => {
+      if (subtask.isResolved()) {
+        subtask.deliverResolve();
+      }
+      const event = {
+        code: ASYNC_EVENT_CODE.SUBTASK,
+        payload0: subtask.waitableRep(),
+        payload1: subtask.getStateNumber()
+      };
+      return event;
+    });
+  });
+  const requiresManualAsyncResult = !isAsync && !funcTypeIsAsync && isManualAsync;
+  let manualAsyncResult;
+  if (requiresManualAsyncResult) {
+    manualAsyncResult = promiseWithResolvers();
+  }
+  queueMicrotask(async () => {
+    try {
+      _debugLog("[_lowerImportBackwardsCompat()] calling lowered import", { importFn, params });
+      if (createdTask) {
+        await createdTask.enter();
+      }
+      const asyncRes = await importFn(...params);
+      if (requiresManualAsyncResult) {
+        manualAsyncResult.resolve(subtask.getResult());
+      }
+      if (createdTask) {
+        createdTask.resolve([asyncRes]);
+      }
+    } catch (err) {
+      _debugLog("[_lowerImportBackwardsCompat()] import fn error:", err);
+      if (requiresManualAsyncResult) {
+        manualAsyncResult.reject(err);
+        return;
+      }
+      task.setErrored(err);
+      task.reject(err);
+    }
+  });
+  if (requiresManualAsyncResult) {
+    return manualAsyncResult.promise;
+  }
+  _debugLog("[_lowerImportBackwardsCompat()] async-lowered import return", {
+    fnName: importFn.fnName,
+    componentIdx: componentIdx2,
+    subtaskID: subtask.id(),
+    waitableRep: subtask.waitableRep(),
+    subtaskState,
+    packedResult: Number(subtask.waitableRep()) << 4 | subtaskState
+  });
+  return Number(subtask.waitableRep()) << 4 | subtaskState;
+}
 var CURRENT_TASK_MAY_BLOCK = globalThis.WebAssembly ? new globalThis.WebAssembly.Global({ value: "i32", mutable: true }, 0) : false;
+function _liftFlatU8(ctx) {
+  _debugLog("[_liftFlatU8()] args", { ctx });
+  let val;
+  if (ctx.useDirectParams) {
+    if (ctx.params.length === 0) {
+      throw new Error("expected at least a single i32 argument");
+    }
+    val = ctx.params[0];
+    ctx.params = ctx.params.slice(1);
+    return [val, ctx];
+  }
+  if (ctx.storageLen !== void 0 && ctx.storageLen < 1) {
+    throw new Error(`insufficient storage ([${ctx.storageLen}] bytes) for lift (u8 requires 1 byte)`);
+  }
+  val = new DataView(ctx.memory.buffer).getUint8(ctx.storagePtr, true);
+  ctx.storagePtr += 1;
+  if (ctx.storageLen !== void 0) {
+    ctx.storageLen -= 1;
+  }
+  return [val, ctx];
+}
+function _liftFlatU16(ctx) {
+  _debugLog("[_liftFlatU16()] args", { ctx });
+  let val;
+  if (ctx.useDirectParams) {
+    if (ctx.params.length === 0) {
+      throw new Error("expected at least a single i32 argument");
+    }
+    val = ctx.params[0];
+    ctx.params = ctx.params.slice(1);
+    return [val, ctx];
+  }
+  if (ctx.storageLen !== void 0 && ctx.storageLen < 2) {
+    throw new Error(`insufficient storage ([${ctx.storageLen}] bytes) for lift (u16 requires 2 bytes)`);
+  }
+  val = new DataView(ctx.memory.buffer).getUint16(ctx.storagePtr, true);
+  ctx.storagePtr += 2;
+  if (ctx.storageLen !== void 0) {
+    ctx.storageLen -= 2;
+  }
+  const rem = ctx.storagePtr % 2;
+  if (rem !== 0) {
+    ctx.storagePtr += 2 - rem;
+  }
+  return [val, ctx];
+}
+function _liftFlatU32(ctx) {
+  _debugLog("[_liftFlatU32()] args", { ctx });
+  let val;
+  if (ctx.useDirectParams) {
+    if (ctx.params.length === 0) {
+      throw new Error("expected at least a single i34 argument");
+    }
+    val = ctx.params[0] >>> 0;
+    ctx.params = ctx.params.slice(1);
+    return [val, ctx];
+  }
+  if (ctx.storageLen !== void 0 && ctx.storageLen < 4) {
+    throw new Error(`insufficient storage ([${ctx.storageLen}] bytes) for lift (u32 requires 4 bytes)`);
+  }
+  val = new DataView(ctx.memory.buffer).getUint32(ctx.storagePtr, true);
+  ctx.storagePtr += 4;
+  if (ctx.storageLen !== void 0) {
+    ctx.storageLen -= 4;
+  }
+  return [val, ctx];
+}
+function _liftFlatU64(ctx) {
+  _debugLog("[_liftFlatU64()] args", { ctx });
+  let val;
+  if (ctx.useDirectParams) {
+    if (ctx.params.length === 0) {
+      throw new Error("expected at least one single i64 argument");
+    }
+    if (typeof ctx.params[0] !== "bigint") {
+      throw new Error("expected bigint");
+    }
+    val = BigInt.asUintN(64, ctx.params[0]);
+    ctx.params = ctx.params.slice(1);
+    return [val, ctx];
+  }
+  if (ctx.storageLen !== void 0 && ctx.storageLen < 8) {
+    throw new Error(`insufficient storage ([${ctx.storageLen}] bytes) for lift (u64 requires 8 bytes)`);
+  }
+  val = new DataView(ctx.memory.buffer).getBigUint64(ctx.storagePtr, true);
+  ctx.storagePtr += 8;
+  if (ctx.storageLen !== void 0) {
+    ctx.storageLen -= 8;
+  }
+  return [val, ctx];
+}
+var _liftFlatVariantScratch = new DataView(new ArrayBuffer(8));
+function _liftFlatVariant(meta) {
+  const {
+    caseMetas,
+    variantSize32,
+    variantAlign32,
+    variantPayloadOffset32,
+    variantFlatCount,
+    variantPayloadFlatTypes,
+    isEnum
+  } = meta;
+  return function _liftFlatVariantInner(ctx) {
+    _debugLog("[_liftFlatVariant()] args", { ctx });
+    const origUseParams = ctx.useDirectParams;
+    let caseIdx;
+    let liftRes;
+    const originalPtr = ctx.storagePtr;
+    const numCases = caseMetas.length;
+    if (caseMetas.length < 256) {
+      liftRes = _liftFlatU8(ctx);
+    } else if (numCases >= 256 && numCases < 65536) {
+      liftRes = _liftFlatU16(ctx);
+    } else if (numCases >= 65536 && numCases < 4294967296) {
+      liftRes = _liftFlatU32(ctx);
+    } else {
+      throw new Error(`unsupported number of variant cases [${numCases}]`);
+    }
+    caseIdx = liftRes[0];
+    ctx = liftRes[1];
+    const [
+      tag,
+      liftFn,
+      caseSize32,
+      caseAlign32,
+      caseFlatCount,
+      caseFlatTypes
+    ] = caseMetas[caseIdx];
+    if (variantPayloadOffset32 === void 0) {
+      throw new Error("unexpectedly missing payload offset");
+    }
+    if (originalPtr !== void 0) {
+      ctx.storagePtr = originalPtr + variantPayloadOffset32;
+    }
+    let val;
+    if (liftFn === null) {
+      val = { tag };
+      if (originalPtr !== void 0) {
+        ctx.storagePtr = originalPtr + variantSize32;
+      }
+    } else {
+      if (ctx.useDirectParams) {
+        if (!variantPayloadFlatTypes || !caseFlatTypes) {
+          throw new Error("missing variant flat type metadata during direct-param lift");
+        }
+        const scratch = _liftFlatVariantScratch;
+        for (let i = 0; i < caseFlatTypes.length; i++) {
+          const have = variantPayloadFlatTypes[i];
+          const want = caseFlatTypes[i];
+          if (have === want) {
+            continue;
+          }
+          const val2 = ctx.params[i];
+          if (have === "i64" && want === "i32") {
+            ctx.params[i] = Number(BigInt.asIntN(32, val2));
+          } else if (have === "i64" && want === "f32") {
+            scratch.setInt32(0, Number(BigInt.asIntN(32, val2)), true);
+            ctx.params[i] = scratch.getFloat32(0, true);
+          } else if (have === "i64" && want === "f64") {
+            scratch.setBigInt64(0, val2, true);
+            ctx.params[i] = scratch.getFloat64(0, true);
+          } else if (have === "i32" && want === "f32") {
+            scratch.setInt32(0, val2, true);
+            ctx.params[i] = scratch.getFloat32(0, true);
+          } else {
+            throw new Error(`invalid variant payload coercion [${have}] -> [${want}]`);
+          }
+        }
+      }
+      const [newVal, newCtx] = liftFn(ctx);
+      val = { tag, val: newVal };
+      ctx = newCtx;
+    }
+    if (origUseParams) {
+      if (variantFlatCount === void 0 || variantFlatCount === null) {
+        _debugLog("[_liftFlatVariant()] variant with unknown flat count", { ctx, meta });
+        throw new Error("cannot lift variant with unknown flat count");
+      }
+      if (caseFlatCount === void 0 || caseFlatCount === null) {
+        _debugLog("[_liftFlatVariant()] case with unknown flat count", { ctx, meta, case: meta.caseMetas[caseIdx] });
+        throw new Error("cannot lift case with unknown flat count");
+      }
+      const remainingPayloadParams = variantFlatCount - caseFlatCount - (isEnum ? 0 : 1);
+      if (remainingPayloadParams < 0) {
+        throw new Error(`invalid variant flat count metadata`);
+      }
+      if (ctx.params.length < remainingPayloadParams) {
+        throw new Error(`expected at least [${remainingPayloadParams}] remaining variant payload params, but got [${ctx.params.length}]`);
+      }
+      ctx.params = ctx.params.slice(remainingPayloadParams);
+    }
+    if (ctx.storagePtr !== void 0) {
+      const rem = ctx.storagePtr % variantAlign32;
+      if (rem !== 0) {
+        ctx.storagePtr += variantAlign32 - rem;
+      }
+    }
+    return [val, ctx];
+  };
+}
+function _liftFlatList(meta) {
+  const { elemLiftFn, elemSize32, elemAlign32, knownLen, typedArray } = meta;
+  const listValue = typedArray === void 0 ? (values) => values : (values) => new typedArray(values);
+  const readValuesAndReset = (ctx, originalPtr, originalLen, dataPtr, len) => {
+    if (dataPtr % elemAlign32 !== 0) {
+      throw new TypeError(`list pointer [${dataPtr}] is not aligned to ${elemAlign32}`);
+    }
+    ctx.storagePtr = dataPtr;
+    const val = [];
+    for (var i = 0; i < len; i++) {
+      const elemPtr = dataPtr + i * elemSize32;
+      ctx.storagePtr = elemPtr;
+      const [res, nextCtx] = elemLiftFn(ctx);
+      val.push(res);
+      ctx = nextCtx;
+      ctx.storagePtr = Math.max(ctx.storagePtr, elemPtr + elemSize32);
+    }
+    if (originalPtr !== null) {
+      ctx.storagePtr = originalPtr;
+    }
+    if (originalLen !== null) {
+      ctx.storageLen = originalLen;
+    }
+    return [listValue(val), ctx];
+  };
+  return function _liftFlatListInner(ctx) {
+    _debugLog("[_liftFlatList()] args", { ctx });
+    let liftResults;
+    if (knownLen !== void 0) {
+      if (ctx.useDirectParams) {
+        _debugLog("memory unexpectedly missing while lifting unknown length list", { ctx });
+        liftResults = [listValue(ctx.params.slice(0, knownLen)), ctx];
+        ctx.params = ctx.params.slice(knownLen);
+      } else {
+        if (ctx.memory === null) {
+          _debugLog("memory unexpectedly missing while lifting known length list", { knownLen, ctx });
+          throw new Error(`memory missing while lifting known length (${knownLen}) list`);
+        }
+        const originalLen = ctx.storageLen;
+        const originalPtr = ctx.storagePtr;
+        ctx.storageLen = knownLen * elemSize32;
+        liftResults = readValuesAndReset(ctx, null, originalLen, ctx.storagePtr, knownLen);
+      }
+    } else {
+      if (ctx.useDirectParams) {
+        const dataPtr = ctx.params[0];
+        const len = ctx.params[1];
+        ctx.params = ctx.params.slice(2);
+        ctx.useDirectParams = false;
+        const originalPtr = ctx.storagePtr;
+        const originalLen = ctx.storageLen;
+        ctx.storageLen = len * elemSize32;
+        liftResults = readValuesAndReset(ctx, originalPtr, originalLen, dataPtr, len);
+        ctx.useDirectParams = true;
+      } else {
+        const originalLen = ctx.storageLen;
+        ctx.storageLen = 8;
+        const dataPtrLiftRes = _liftFlatU32(ctx);
+        const dataPtr = dataPtrLiftRes[0];
+        ctx = dataPtrLiftRes[1];
+        const lenLiftRes = _liftFlatU32(ctx);
+        const len = lenLiftRes[0];
+        ctx = lenLiftRes[1];
+        const originalPtr = ctx.storagePtr;
+        ctx.storagePtr = dataPtr;
+        ctx.storageLen = len * elemSize32;
+        liftResults = readValuesAndReset(ctx, originalPtr, originalLen, dataPtr, len);
+      }
+    }
+    return liftResults;
+  };
+}
+function _liftFlatResult(meta) {
+  const f = _liftFlatVariant(meta);
+  return function _liftFlatResultInner(ctx) {
+    _debugLog("[_liftFlatResult()] args", { ctx });
+    const res = f(ctx);
+    if (!("val" in res[0])) {
+      res[0].val = void 0;
+    }
+    return res;
+  };
+}
+function _liftFlatBorrow(componentTableIdx, size, memory, vals, storagePtr, storageLen) {
+  _debugLog("[_liftFlatBorrow()] args", { size, memory, vals, storagePtr, storageLen });
+  throw new Error("flat lift for borrowed resources is not supported!");
+}
+function _lowerFlatU8(ctx) {
+  _debugLog("[_lowerFlatU8()] args", ctx);
+  if (ctx.vals.length !== 1) {
+    throw new Error(`unexpected number [${ctx.vals.length}] of vals (expected 1)`);
+  }
+  _requireValidNumericPrimitive.bind("u8", ctx.vals[0]);
+  if (!ctx.memory) {
+    throw new Error("missing memory for lower");
+  }
+  new DataView(ctx.memory.buffer).setUint8(ctx.storagePtr, ctx.vals[0]);
+  ctx.storagePtr += 1;
+}
+function _lowerFlatU16(ctx) {
+  _debugLog("[_lowerFlatU16()] args", { ctx });
+  if (!ctx.memory) {
+    throw new Error("missing memory for lower");
+  }
+  if (ctx.vals.length !== 1) {
+    throw new Error(`unexpected number [${ctx.vals.length}] of vals (expected 1)`);
+  }
+  const rem = ctx.storagePtr % 2;
+  if (rem !== 0) {
+    ctx.storagePtr += 2 - rem;
+  }
+  _requireValidNumericPrimitive.bind("u16", ctx.vals[0]);
+  new DataView(ctx.memory.buffer).setUint16(ctx.storagePtr, ctx.vals[0], true);
+  ctx.storagePtr += 2;
+}
+function _lowerFlatU32(ctx) {
+  _debugLog("[_lowerFlatU32()] args", { ctx });
+  if (ctx.vals.length !== 1) {
+    throw new Error(`expected single value to lower, got [${ctx.vals.length}]`);
+  }
+  const rem = ctx.storagePtr % 4;
+  if (rem !== 0) {
+    ctx.storagePtr += 4 - rem;
+  }
+  _requireValidNumericPrimitive.bind("u32", ctx.vals[0]);
+  new DataView(ctx.memory.buffer).setUint32(ctx.storagePtr, ctx.vals[0], true);
+  ctx.storagePtr += 4;
+}
+function _lowerFlatU64(ctx) {
+  _debugLog("[_lowerFlatU64()] args", { ctx });
+  if (ctx.vals.length !== 1) {
+    throw new Error("unexpected number of vals");
+  }
+  const rem = ctx.storagePtr % 8;
+  if (rem !== 0) {
+    ctx.storagePtr += 8 - rem;
+  }
+  _requireValidNumericPrimitive.bind("u64", ctx.vals[0]);
+  new DataView(ctx.memory.buffer).setBigUint64(ctx.storagePtr, ctx.vals[0], true);
+  ctx.storagePtr += 8;
+}
+function _lowerFlatStringUTF8(ctx) {
+  _debugLog("[_lowerFlatStringUTF8()] args", ctx);
+  if (!ctx.realloc) {
+    throw new Error("missing realloc during flat string lower");
+  }
+  const { ptr, len } = _utf8AllocateAndEncode(ctx.vals[0], ctx.realloc, ctx.memory);
+  const view = new DataView(ctx.memory.buffer);
+  view.setUint32(ctx.storagePtr, ptr, true);
+  view.setUint32(ctx.storagePtr + 4, len, true);
+  ctx.storagePtr += 8;
+}
+function _lowerFlatStringUTF16(ctx) {
+  _debugLog("[_lowerFlatStringUTF16()] args", { ctx });
+  if (!ctx.realloc) {
+    throw new Error("missing realloc during flat string lower");
+  }
+  const { ptr, len } = _utf16AllocateAndEncode(ctx.vals[0], ctx.realloc, ctx.memory);
+  const view = new DataView(ctx.memory.buffer);
+  view.setUint32(ctx.storagePtr, ptr, true);
+  view.setUint32(ctx.storagePtr + 4, len, true);
+  ctx.storagePtr += 8;
+}
+function _lowerFlatStringAny(ctx) {
+  switch (ctx.stringEncoding) {
+    case "utf8":
+      return _lowerFlatStringUTF8(ctx);
+    case "utf16":
+      return _lowerFlatStringUTF16(ctx);
+    default:
+      throw new Error(`missing/unrecognized/unsupported string encoding [${ctx.stringEncoding}]`);
+  }
+}
+function _lowerFlatRecord(meta) {
+  const { fieldMetas, size32: recordSize32, align32: recordAlign32 } = meta;
+  return function _lowerFlatRecordInner(ctx) {
+    _debugLog("[_lowerFlatRecord()] args", { ctx });
+    const originalPtr = ctx.storagePtr;
+    const r = ctx.vals[0];
+    for (const [tag, lowerFn, size32, align32] of fieldMetas) {
+      const rem2 = ctx.storagePtr % align32;
+      if (rem2 !== 0) {
+        ctx.storagePtr += align32 - rem2;
+      }
+      const fieldPtr = ctx.storagePtr;
+      ctx.vals = [r[tag]];
+      lowerFn(ctx);
+      ctx.storagePtr = Math.max(ctx.storagePtr, fieldPtr + size32);
+    }
+    ctx.storagePtr = Math.max(ctx.storagePtr, originalPtr + recordSize32);
+    const rem = ctx.storagePtr % recordAlign32;
+    if (rem !== 0) {
+      ctx.storagePtr += recordAlign32 - rem;
+    }
+  };
+}
+function _lowerFlatVariant(meta) {
+  const { variantSize32, variantAlign32, variantPayloadOffset32, caseMetas } = meta;
+  let caseLookup = {};
+  for (const [idx, meta2] of caseMetas.entries()) {
+    let tag = meta2[0];
+    caseLookup[tag] = { discriminant: idx, meta: meta2 };
+  }
+  return function _lowerFlatVariantInner(ctx) {
+    _debugLog("[_lowerFlatVariant()] args", { ctx });
+    const { tag, val } = ctx.vals[0];
+    const variantCase = caseLookup[tag];
+    if (!variantCase) {
+      throw new Error(`missing tag [${tag}] (valid tags: ${Object.keys(caseLookup)})`);
+    }
+    const [_tag, lowerFn, caseSize32, caseAlign32, caseFlatCount] = variantCase.meta;
+    const originalPtr = ctx.storagePtr;
+    ctx.vals = [variantCase.discriminant];
+    let discLowerRes;
+    if (caseMetas.length < 256) {
+      discLowerRes = _lowerFlatU8(ctx);
+    } else if (caseMetas.length >= 256 && caseMetas.length < 65536) {
+      discLowerRes = _lowerFlatU16(ctx);
+    } else if (caseMetas.length >= 65536 && caseMetas.length < 4294967296) {
+      discLowerRes = _lowerFlatU32(ctx);
+    } else {
+      throw new Error(`unsupported number of cases [${caseMetas.length}]`);
+    }
+    const payloadOffsetPtr = originalPtr + variantPayloadOffset32;
+    ctx.storagePtr = payloadOffsetPtr;
+    ctx.vals = [val];
+    if (lowerFn) {
+      lowerFn(ctx);
+    }
+    ctx.storagePtr = Math.max(ctx.storagePtr, originalPtr + variantSize32);
+    const rem = ctx.storagePtr % variantAlign32;
+    if (rem !== 0) {
+      ctx.storagePtr += variantAlign32 - rem;
+    }
+  };
+}
+function _lowerFlatList(meta) {
+  const {
+    elemLowerFn,
+    knownLen,
+    size32,
+    align32,
+    elemSize32,
+    elemAlign32
+  } = meta;
+  if (!elemLowerFn) {
+    throw new TypeError("missing/invalid element lower fn for list");
+  }
+  return function _lowerFlatListInner(ctx) {
+    _debugLog("[_lowerFlatList()] args", { ctx });
+    if (ctx.useDirectParams) {
+      if (ctx.params.length < 2) {
+        throw new Error("insufficient params left to lower list");
+      }
+      const storagePtr = ctx.params[0];
+      const elemCount = ctx.params[1];
+      ctx.params = ctx.params.slice(2);
+      const list = ctx.vals[0];
+      if (!list) {
+        throw new Error("missing direct param value");
+      }
+      const lowerCtx = {
+        storagePtr,
+        memory: ctx.memory,
+        stringEncoding: ctx.stringEncoding
+      };
+      for (let idx = 0; idx < list.length; idx++) {
+        const elemPtr = storagePtr + idx * elemSize32;
+        lowerCtx.storagePtr = elemPtr;
+        lowerCtx.vals = list.slice(idx, idx + 1);
+        elemLowerFn(lowerCtx);
+        lowerCtx.storagePtr = Math.max(lowerCtx.storagePtr, elemPtr + elemSize32);
+      }
+      ctx.storagePtr = lowerCtx.storagePtr;
+      return;
+    }
+    const elems = ctx.vals[0];
+    if (knownLen === void 0) {
+      if (!ctx.realloc) {
+        throw new Error("missing realloc during flat string lower");
+      }
+      const dataPtr = ctx.realloc(0, 0, elemAlign32, elemSize32 * elems.length);
+      ctx.vals[0] = dataPtr;
+      _lowerFlatU32(ctx);
+      ctx.vals[0] = elems.length;
+      _lowerFlatU32(ctx);
+      const origPtr = ctx.storagePtr;
+      ctx.storagePtr = dataPtr;
+      for (const [idx, elem] of elems.entries()) {
+        const elemPtr = dataPtr + idx * elemSize32;
+        ctx.storagePtr = elemPtr;
+        ctx.vals = [elem];
+        elemLowerFn(ctx);
+        ctx.storagePtr = Math.max(ctx.storagePtr, elemPtr + elemSize32);
+      }
+      ctx.storagePtr = origPtr;
+    } else {
+      if (elems.length !== knownLen) {
+        throw new TypeError(`invalid list input of length [${elems.length}], must be length [${knownLen}]`);
+      }
+      const originalPtr = ctx.storagePtr;
+      for (const [idx, elem] of elems.entries()) {
+        const elemPtr = originalPtr + idx * elemSize32;
+        ctx.storagePtr = elemPtr;
+        ctx.vals = [elem];
+        elemLowerFn(ctx);
+        ctx.storagePtr = Math.max(ctx.storagePtr, elemPtr + elemSize32);
+      }
+    }
+    const totalSizeBytes = elems.length * size32;
+    if (ctx.storageLen !== void 0 && totalSizeBytes > ctx.storageLen) {
+      throw new Error("not enough storage remaining for list flat lower");
+    }
+  };
+}
+function _lowerFlatTuple(meta) {
+  const { elemLowerMetas, size32: tupleSize32, align32: tupleAlign32 } = meta;
+  return function _lowerFlatTupleInner(ctx) {
+    _debugLog("[_lowerFlatTuple()] args", { ctx });
+    const originalPtr = ctx.storagePtr;
+    const tuple = ctx.vals[0];
+    for (const [idx, [lowerFn, size32, align32]] of elemLowerMetas.entries()) {
+      const rem2 = ctx.storagePtr % align32;
+      if (rem2 !== 0) {
+        ctx.storagePtr += align32 - rem2;
+      }
+      const elemPtr = ctx.storagePtr;
+      ctx.vals = [tuple[idx]];
+      lowerFn(ctx);
+      ctx.storagePtr = Math.max(ctx.storagePtr, elemPtr + size32);
+    }
+    ctx.storagePtr = Math.max(ctx.storagePtr, originalPtr + tupleSize32);
+    const rem = ctx.storagePtr % tupleAlign32;
+    if (rem !== 0) {
+      ctx.storagePtr += tupleAlign32 - rem;
+    }
+  };
+}
+function _lowerFlatEnum(meta) {
+  const f = _lowerFlatVariant(meta);
+  return function _lowerFlatEnumInner(ctx) {
+    _debugLog("[_lowerFlatEnum()] args", { ctx });
+    const v = ctx.vals[0];
+    const isNotEnumObject = typeof v !== "object" || Object.keys(v).length !== 2 || !("tag" in v);
+    if (isNotEnumObject) {
+      ctx.vals[0] = { tag: v };
+    }
+    f(ctx);
+  };
+}
+function _lowerFlatOption(meta) {
+  const { payloadMaybeNull } = meta;
+  const f = _lowerFlatVariant(meta);
+  return function _lowerFlatOptionInner(ctx) {
+    _debugLog("[_lowerFlatOption()] args", { ctx });
+    const v = ctx.vals[0];
+    if (v === null || v === void 0) {
+      ctx.vals[0] = { tag: "none" };
+    } else if (payloadMaybeNull) {
+      const isNotOptionObject = typeof v !== "object" || Object.keys(v).length !== 2 || !("tag" in v) || !(v.tag === "some" || v.tag === "none") || !("val" in v);
+      if (isNotOptionObject) {
+        ctx.vals[0] = { tag: "some", val: v };
+      }
+    } else {
+      ctx.vals[0] = { tag: "some", val: v };
+    }
+    f(ctx);
+  };
+}
+function _lowerFlatResult(meta) {
+  const f = _lowerFlatVariant(meta);
+  return function _lowerFlatResultInner(ctx) {
+    _debugLog("[_lowerFlatResult()] args", { ctx });
+    const v = ctx.vals[0];
+    const isNotResultObject = typeof v !== "object" || Object.keys(v).length !== 2 || !("tag" in v) || !("ok" === v.tag || "err" === v.tag) || !("val" in v);
+    if (isNotResultObject) {
+      ctx.vals[0] = { tag: "ok", val: v };
+    }
+    f(ctx);
+  };
+}
+function _lowerFlatOwn(meta) {
+  const { lowerFn, componentIdx: componentIdx2, tableIdx } = meta;
+  return function _lowerFlatOwnInner(ctx) {
+    _debugLog("[_lowerFlatOwn()] args", { ctx });
+    const { createFn } = ctx;
+    if (ctx.componentIdx !== componentIdx2) {
+      throw new Error(`component index mismatch (expected [${componentIdx2}], lift called from [${ctx.componentIdx}])`);
+    }
+    const obj = ctx.vals[0];
+    if (obj === void 0 || obj === null) {
+      throw new Error("missing resource");
+    }
+    const handle = ctx.lowerResource ? ctx.lowerResource(obj, tableIdx) : lowerFn(obj);
+    ctx.vals[0] = handle;
+    _lowerFlatU32(ctx);
+  };
+}
+function _trackHostOperation(operation) {
+  const result = operation();
+  if (result === null || typeof result !== "object" && typeof result !== "function" || typeof result.then !== "function") {
+    return result;
+  }
+  STORE_ASYNC_STATE.pendingHostOperations++;
+  return Promise.resolve(result).finally(() => {
+    STORE_ASYNC_STATE.pendingHostOperations--;
+    if (STORE_ASYNC_STATE.pendingHostOperations < 0) {
+      throw new Error("negative pending host operation count");
+    }
+    for (const state of ASYNC_STATE.values()) {
+      state.runTickLoop();
+    }
+    _checkForDeadlock();
+  });
+}
+function _guardMayLeave(componentIdx2, fn) {
+  return function(...args) {
+    _checkMayLeave(componentIdx2);
+    return fn.apply(this, args);
+  };
+}
+var base64Compile = (str) => WebAssembly.compile(
+  typeof Buffer !== "undefined" ? Buffer.from(str, "base64") : Uint8Array.from(atob(str), (b) => b.charCodeAt(0))
+);
+function clampGuest(i, min, max) {
+  if (i < min || i > max) {
+    throw new TypeError(`must be between ${min} and ${max}`);
+  }
+  return i;
+}
 var isNode = typeof process !== "undefined" && process.versions && process.versions.node;
 var _fs;
 async function fetchCompile(url) {
@@ -2340,15 +4704,2740 @@ async function fetchCompile(url) {
   }
   return fetch(url).then(WebAssembly.compileStreaming);
 }
+var symbolCabiDispose = /* @__PURE__ */ Symbol.for("cabiDispose");
+var symbolRscHandle = /* @__PURE__ */ Symbol("handle");
+var symbolRscRep = /* @__PURE__ */ Symbol.for("cabiRep");
+var symbolDispose3 = Symbol.dispose || /* @__PURE__ */ Symbol.for("dispose");
+var HANDLE_TABLES = [];
+var ComponentError = class extends Error {
+  constructor(value) {
+    const enumerable = typeof value !== "string";
+    super(enumerable ? `${String(value)} (see error.payload)` : value);
+    Object.defineProperty(this, "payload", { value, enumerable });
+  }
+};
+var hasOwnProperty = Object.prototype.hasOwnProperty;
+function getErrorPayload(e) {
+  if (e && hasOwnProperty.call(e, "payload")) return e.payload;
+  if (e instanceof Error) throw e;
+  return e;
+}
+function throwInvalidBool() {
+  throw new TypeError("invalid variant discriminant for bool");
+}
 var instantiateCore = WebAssembly.instantiate;
+function _suspendingImport(componentIdx2, fn, syncOnly = false, switchesTask = false) {
+  return function(...args) {
+    _checkMayLeave(componentIdx2);
+    const saved = CURRENT_TASK_META[componentIdx2] ?? null;
+    const savedTask = saved ? getCurrentTask(saved.componentIdx, saved.taskID)?.task : null;
+    const mayBlock = savedTask ? savedTask?.mayBlock() ?? CURRENT_TASK_MAY_BLOCK.value !== 0 : false;
+    if (!saved && !mayBlock) {
+      throw new WebAssemblyRuntimeError("cannot block a synchronous task before returning");
+    }
+    if (syncOnly || !mayBlock) {
+      let result;
+      try {
+        result = fn.apply(null, args);
+      } catch (err) {
+        CURRENT_TASK_META[componentIdx2] = saved;
+        if (!switchesTask) {
+          CURRENT_TASK_META.current = saved;
+        }
+        throw err;
+      }
+      CURRENT_TASK_META[componentIdx2] = saved;
+      if (!switchesTask) {
+        CURRENT_TASK_META.current = saved;
+      }
+      if (result !== null && (typeof result === "object" || typeof result === "function") && typeof result.then === "function") {
+        Promise.resolve(result).catch(() => {
+        });
+        throw new WebAssemblyRuntimeError("cannot block a synchronous task before returning");
+      }
+      return result;
+    }
+    return (async () => {
+      try {
+        return await fn.apply(null, args);
+      } finally {
+        CURRENT_TASK_META[componentIdx2] = saved;
+        if (!switchesTask) {
+          CURRENT_TASK_META.current = saved;
+        }
+      }
+    })();
+  };
+}
 var exports0;
+var exports1;
+var _trampoline0 = function() {
+  _debugLog('[iface="wasi:clocks/monotonic-clock@0.2.3", function="now"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "now",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "none",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    ret = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => now())
+    });
+  } catch (err) {
+    _debugLog("[Instruction::CallInterface] error during sync call", {
+      taskID: task.id(),
+      subtaskID: task.getParentSubtask()?.id(),
+      err
+    });
+    getOrCreateAsyncState(0).markTrapped(err);
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+  }
+  _debugLog('[iface="wasi:clocks/monotonic-clock@0.2.3", function="now"][Instruction::Return]', {
+    funcName: "now",
+    paramCount: 1,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([toUint64(ret)]);
+  task.exit();
+  return toUint64(ret);
+};
+_trampoline0.fnName = "wasi:clocks/monotonic-clock@0.2.3#now";
+var handleTable1 = [T_FLAG, 0];
+handleTable1._createdReps = /* @__PURE__ */ new Set();
+handleTable1._componentIdx = 0;
+var captureTable1 = /* @__PURE__ */ new Map();
+var captureCnt1 = 0;
+HANDLE_TABLES[1] = handleTable1;
+var _trampoline5 = function() {
+  _debugLog('[iface="wasi:cli/stderr@0.2.3", function="get-stderr"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "getStderr",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "none",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    ret = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => getStderr())
+    });
+  } catch (err) {
+    _debugLog("[Instruction::CallInterface] error during sync call", {
+      taskID: task.id(),
+      subtaskID: task.getParentSubtask()?.id(),
+      err
+    });
+    getOrCreateAsyncState(0).markTrapped(err);
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+  }
+  if (!(ret instanceof OutputStream2)) {
+    throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+  }
+  var handle0 = ret[symbolRscHandle];
+  if (!handle0) {
+    const rep2 = ret[symbolRscRep] || ++captureCnt1;
+    captureTable1.set(rep2, ret);
+    handle0 = rscTableCreateOwn(handleTable1, rep2);
+  }
+  _debugLog('[iface="wasi:cli/stderr@0.2.3", function="get-stderr"][Instruction::Return]', {
+    funcName: "get-stderr",
+    paramCount: 1,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([handle0]);
+  task.exit();
+  return handle0;
+};
+_trampoline5.fnName = "wasi:cli/stderr@0.2.3#getStderr";
+var handleTable2 = [T_FLAG, 0];
+handleTable2._createdReps = /* @__PURE__ */ new Set();
+handleTable2._componentIdx = 0;
+var captureTable2 = /* @__PURE__ */ new Map();
+var captureCnt2 = 0;
+HANDLE_TABLES[2] = handleTable2;
+var _trampoline6 = function() {
+  _debugLog('[iface="wasi:cli/stdin@0.2.3", function="get-stdin"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "getStdin",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "none",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    ret = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => getStdin())
+    });
+  } catch (err) {
+    _debugLog("[Instruction::CallInterface] error during sync call", {
+      taskID: task.id(),
+      subtaskID: task.getParentSubtask()?.id(),
+      err
+    });
+    getOrCreateAsyncState(0).markTrapped(err);
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+  }
+  if (!(ret instanceof InputStream2)) {
+    throw new TypeError('Resource error: Not a valid "InputStream" resource.');
+  }
+  var handle0 = ret[symbolRscHandle];
+  if (!handle0) {
+    const rep2 = ret[symbolRscRep] || ++captureCnt2;
+    captureTable2.set(rep2, ret);
+    handle0 = rscTableCreateOwn(handleTable2, rep2);
+  }
+  _debugLog('[iface="wasi:cli/stdin@0.2.3", function="get-stdin"][Instruction::Return]', {
+    funcName: "get-stdin",
+    paramCount: 1,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([handle0]);
+  task.exit();
+  return handle0;
+};
+_trampoline6.fnName = "wasi:cli/stdin@0.2.3#getStdin";
+var _trampoline7 = function() {
+  _debugLog('[iface="wasi:cli/stdout@0.2.3", function="get-stdout"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "getStdout",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "none",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    ret = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => getStdout())
+    });
+  } catch (err) {
+    _debugLog("[Instruction::CallInterface] error during sync call", {
+      taskID: task.id(),
+      subtaskID: task.getParentSubtask()?.id(),
+      err
+    });
+    getOrCreateAsyncState(0).markTrapped(err);
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+  }
+  if (!(ret instanceof OutputStream2)) {
+    throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+  }
+  var handle0 = ret[symbolRscHandle];
+  if (!handle0) {
+    const rep2 = ret[symbolRscRep] || ++captureCnt1;
+    captureTable1.set(rep2, ret);
+    handle0 = rscTableCreateOwn(handleTable1, rep2);
+  }
+  _debugLog('[iface="wasi:cli/stdout@0.2.3", function="get-stdout"][Instruction::Return]', {
+    funcName: "get-stdout",
+    paramCount: 1,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([handle0]);
+  task.exit();
+  return handle0;
+};
+_trampoline7.fnName = "wasi:cli/stdout@0.2.3#getStdout";
+var _trampoline8 = function(arg0) {
+  let variant0;
+  switch (arg0) {
+    case 0: {
+      variant0 = {
+        tag: "ok",
+        val: void 0
+      };
+      break;
+    }
+    case 1: {
+      variant0 = {
+        tag: "err",
+        val: void 0
+      };
+      break;
+    }
+    default: {
+      throw new TypeError("invalid variant discriminant for expected");
+    }
+  }
+  _debugLog('[iface="wasi:cli/exit@0.2.3", function="exit"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "exit",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "none",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => exit2(variant0))
+    });
+  } catch (err) {
+    _debugLog("[Instruction::CallInterface] error during sync call", {
+      taskID: task.id(),
+      subtaskID: task.getParentSubtask()?.id(),
+      err
+    });
+    getOrCreateAsyncState(0).markTrapped(err);
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+  }
+  _debugLog('[iface="wasi:cli/exit@0.2.3", function="exit"][Instruction::Return]', {
+    funcName: "exit",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline8.fnName = "wasi:cli/exit@0.2.3#exit";
+var exports2;
 var memory0;
 var realloc0;
 var realloc0Async;
+var _trampoline9 = function(arg0) {
+  _debugLog('[iface="wasi:cli/environment@0.2.3", function="get-environment"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "getEnvironment",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "none",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    ret = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => getEnvironment())
+    });
+  } catch (err) {
+    _debugLog("[Instruction::CallInterface] error during sync call", {
+      taskID: task.id(),
+      subtaskID: task.getParentSubtask()?.id(),
+      err
+    });
+    getOrCreateAsyncState(0).markTrapped(err);
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+  }
+  var vec3 = ret;
+  var len3 = vec3.length;
+  var result3 = realloc0(0, 0, 4, len3 * 16);
+  for (let i = 0; i < vec3.length; i++) {
+    const e = vec3[i];
+    const base = result3 + i * 16;
+    var [tuple0_0, tuple0_1] = e;
+    var encodeRes = _utf8AllocateAndEncode(tuple0_0, realloc0, memory0);
+    var ptr1 = encodeRes.ptr;
+    var len1 = encodeRes.len;
+    dataView(memory0).setUint32(base + 4, len1, true);
+    dataView(memory0).setUint32(base + 0, ptr1, true);
+    var encodeRes = _utf8AllocateAndEncode(tuple0_1, realloc0, memory0);
+    var ptr2 = encodeRes.ptr;
+    var len2 = encodeRes.len;
+    dataView(memory0).setUint32(base + 12, len2, true);
+    dataView(memory0).setUint32(base + 8, ptr2, true);
+  }
+  dataView(memory0).setUint32(arg0 + 4, len3, true);
+  dataView(memory0).setUint32(arg0 + 0, result3, true);
+  _debugLog('[iface="wasi:cli/environment@0.2.3", function="get-environment"][Instruction::Return]', {
+    funcName: "get-environment",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline9.fnName = "wasi:cli/environment@0.2.3#getEnvironment";
+var _trampoline10 = function(arg0) {
+  _debugLog('[iface="wasi:clocks/wall-clock@0.2.3", function="now"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "now$1",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "none",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    ret = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => now$1())
+    });
+  } catch (err) {
+    _debugLog("[Instruction::CallInterface] error during sync call", {
+      taskID: task.id(),
+      subtaskID: task.getParentSubtask()?.id(),
+      err
+    });
+    getOrCreateAsyncState(0).markTrapped(err);
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+  }
+  var { seconds: v0_0, nanoseconds: v0_1 } = ret;
+  dataView(memory0).setBigInt64(arg0 + 0, toUint64(v0_0), true);
+  dataView(memory0).setInt32(arg0 + 8, toUint32(v0_1), true);
+  _debugLog('[iface="wasi:clocks/wall-clock@0.2.3", function="now"][Instruction::Return]', {
+    funcName: "now",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline10.fnName = "wasi:clocks/wall-clock@0.2.3#now$1";
+var handleTable0 = [T_FLAG, 0];
+handleTable0._createdReps = /* @__PURE__ */ new Set();
+handleTable0._componentIdx = 0;
+var captureTable0 = /* @__PURE__ */ new Map();
+var captureCnt0 = 0;
+HANDLE_TABLES[0] = handleTable0;
+var _trampoline11 = function(arg0, arg1) {
+  var handle1 = arg0;
+  var rep2 = handleTable0[(handle1 << 1) + 1] & ~T_FLAG;
+  var rsc0 = captureTable0.get(rep2);
+  if (!rsc0) {
+    rsc0 = Object.create(Error$1.prototype);
+    Object.defineProperty(rsc0, symbolRscHandle, { writable: true, value: handle1 });
+    Object.defineProperty(rsc0, symbolRscRep, { writable: true, value: rep2 });
+  }
+  curResourceBorrows.push(rsc0);
+  _debugLog('[iface="wasi:filesystem/types@0.2.3", function="filesystem-error-code"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "filesystemErrorCode",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "none",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    ret = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => filesystemErrorCode(rsc0))
+    });
+  } catch (err) {
+    _debugLog("[Instruction::CallInterface] error during sync call", {
+      taskID: task.id(),
+      subtaskID: task.getParentSubtask()?.id(),
+      err
+    });
+    getOrCreateAsyncState(0).markTrapped(err);
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+  }
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
+    rsc[symbolRscHandle] = void 0;
+  }
+  curResourceBorrows = [];
+  var variant4 = ret;
+  if (variant4 === null || variant4 === void 0) {
+    dataView(memory0).setInt8(arg1 + 0, 0, true);
+  } else {
+    const e = variant4;
+    dataView(memory0).setInt8(arg1 + 0, 1, true);
+    var val3 = e;
+    let enum3;
+    switch (val3) {
+      case "access": {
+        enum3 = 0;
+        break;
+      }
+      case "would-block": {
+        enum3 = 1;
+        break;
+      }
+      case "already": {
+        enum3 = 2;
+        break;
+      }
+      case "bad-descriptor": {
+        enum3 = 3;
+        break;
+      }
+      case "busy": {
+        enum3 = 4;
+        break;
+      }
+      case "deadlock": {
+        enum3 = 5;
+        break;
+      }
+      case "quota": {
+        enum3 = 6;
+        break;
+      }
+      case "exist": {
+        enum3 = 7;
+        break;
+      }
+      case "file-too-large": {
+        enum3 = 8;
+        break;
+      }
+      case "illegal-byte-sequence": {
+        enum3 = 9;
+        break;
+      }
+      case "in-progress": {
+        enum3 = 10;
+        break;
+      }
+      case "interrupted": {
+        enum3 = 11;
+        break;
+      }
+      case "invalid": {
+        enum3 = 12;
+        break;
+      }
+      case "io": {
+        enum3 = 13;
+        break;
+      }
+      case "is-directory": {
+        enum3 = 14;
+        break;
+      }
+      case "loop": {
+        enum3 = 15;
+        break;
+      }
+      case "too-many-links": {
+        enum3 = 16;
+        break;
+      }
+      case "message-size": {
+        enum3 = 17;
+        break;
+      }
+      case "name-too-long": {
+        enum3 = 18;
+        break;
+      }
+      case "no-device": {
+        enum3 = 19;
+        break;
+      }
+      case "no-entry": {
+        enum3 = 20;
+        break;
+      }
+      case "no-lock": {
+        enum3 = 21;
+        break;
+      }
+      case "insufficient-memory": {
+        enum3 = 22;
+        break;
+      }
+      case "insufficient-space": {
+        enum3 = 23;
+        break;
+      }
+      case "not-directory": {
+        enum3 = 24;
+        break;
+      }
+      case "not-empty": {
+        enum3 = 25;
+        break;
+      }
+      case "not-recoverable": {
+        enum3 = 26;
+        break;
+      }
+      case "unsupported": {
+        enum3 = 27;
+        break;
+      }
+      case "no-tty": {
+        enum3 = 28;
+        break;
+      }
+      case "no-such-device": {
+        enum3 = 29;
+        break;
+      }
+      case "overflow": {
+        enum3 = 30;
+        break;
+      }
+      case "not-permitted": {
+        enum3 = 31;
+        break;
+      }
+      case "pipe": {
+        enum3 = 32;
+        break;
+      }
+      case "read-only": {
+        enum3 = 33;
+        break;
+      }
+      case "invalid-seek": {
+        enum3 = 34;
+        break;
+      }
+      case "text-file-busy": {
+        enum3 = 35;
+        break;
+      }
+      case "cross-device": {
+        enum3 = 36;
+        break;
+      }
+      default: {
+        if (e instanceof Error) {
+          console.error(e);
+        }
+        throw new TypeError(`"${val3}" is not one of the cases of error-code`);
+      }
+    }
+    dataView(memory0).setInt8(arg1 + 1, enum3, true);
+  }
+  _debugLog('[iface="wasi:filesystem/types@0.2.3", function="filesystem-error-code"][Instruction::Return]', {
+    funcName: "filesystem-error-code",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline11.fnName = "wasi:filesystem/types@0.2.3#filesystemErrorCode";
+var handleTable3 = [T_FLAG, 0];
+handleTable3._createdReps = /* @__PURE__ */ new Set();
+handleTable3._componentIdx = 0;
+var captureTable3 = /* @__PURE__ */ new Map();
+var captureCnt3 = 0;
+HANDLE_TABLES[3] = handleTable3;
+var _trampoline12 = function(arg0, arg1, arg2) {
+  var handle1 = arg0;
+  var rep2 = handleTable3[(handle1 << 1) + 1] & ~T_FLAG;
+  var rsc0 = captureTable3.get(rep2);
+  if (!rsc0) {
+    rsc0 = Object.create(Descriptor3.prototype);
+    Object.defineProperty(rsc0, symbolRscHandle, { writable: true, value: handle1 });
+    Object.defineProperty(rsc0, symbolRscRep, { writable: true, value: rep2 });
+  }
+  curResourceBorrows.push(rsc0);
+  _debugLog('[iface="wasi:filesystem/types@0.2.3", function="[method]descriptor.write-via-stream"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "writeViaStream",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "result-catch-handler",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    const hostRet3 = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => rsc0.writeViaStream(BigInt.asUintN(64, BigInt(arg1))))
+    });
+    ret = hostRet3 !== null && typeof hostRet3 === "object" && (hostRet3.tag === "ok" || hostRet3.tag === "err") ? hostRet3 : { tag: "ok", val: hostRet3 };
+  } catch (e) {
+    if (getOrCreateAsyncState(0).markTrapped(e)) {
+      throw e;
+    }
+    ret = { tag: "err", val: getErrorPayload(e) };
+  }
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
+    rsc[symbolRscHandle] = void 0;
+  }
+  curResourceBorrows = [];
+  var variant6 = ret;
+  switch (variant6.tag) {
+    case "ok": {
+      const e = variant6.val;
+      dataView(memory0).setInt8(arg2 + 0, 0, true);
+      if (!(e instanceof OutputStream2)) {
+        throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+      }
+      var handle4 = e[symbolRscHandle];
+      if (!handle4) {
+        const rep3 = e[symbolRscRep] || ++captureCnt1;
+        captureTable1.set(rep3, e);
+        handle4 = rscTableCreateOwn(handleTable1, rep3);
+      }
+      dataView(memory0).setInt32(arg2 + 4, handle4, true);
+      break;
+    }
+    case "err": {
+      const e = variant6.val;
+      dataView(memory0).setInt8(arg2 + 0, 1, true);
+      var val5 = e;
+      let enum5;
+      switch (val5) {
+        case "access": {
+          enum5 = 0;
+          break;
+        }
+        case "would-block": {
+          enum5 = 1;
+          break;
+        }
+        case "already": {
+          enum5 = 2;
+          break;
+        }
+        case "bad-descriptor": {
+          enum5 = 3;
+          break;
+        }
+        case "busy": {
+          enum5 = 4;
+          break;
+        }
+        case "deadlock": {
+          enum5 = 5;
+          break;
+        }
+        case "quota": {
+          enum5 = 6;
+          break;
+        }
+        case "exist": {
+          enum5 = 7;
+          break;
+        }
+        case "file-too-large": {
+          enum5 = 8;
+          break;
+        }
+        case "illegal-byte-sequence": {
+          enum5 = 9;
+          break;
+        }
+        case "in-progress": {
+          enum5 = 10;
+          break;
+        }
+        case "interrupted": {
+          enum5 = 11;
+          break;
+        }
+        case "invalid": {
+          enum5 = 12;
+          break;
+        }
+        case "io": {
+          enum5 = 13;
+          break;
+        }
+        case "is-directory": {
+          enum5 = 14;
+          break;
+        }
+        case "loop": {
+          enum5 = 15;
+          break;
+        }
+        case "too-many-links": {
+          enum5 = 16;
+          break;
+        }
+        case "message-size": {
+          enum5 = 17;
+          break;
+        }
+        case "name-too-long": {
+          enum5 = 18;
+          break;
+        }
+        case "no-device": {
+          enum5 = 19;
+          break;
+        }
+        case "no-entry": {
+          enum5 = 20;
+          break;
+        }
+        case "no-lock": {
+          enum5 = 21;
+          break;
+        }
+        case "insufficient-memory": {
+          enum5 = 22;
+          break;
+        }
+        case "insufficient-space": {
+          enum5 = 23;
+          break;
+        }
+        case "not-directory": {
+          enum5 = 24;
+          break;
+        }
+        case "not-empty": {
+          enum5 = 25;
+          break;
+        }
+        case "not-recoverable": {
+          enum5 = 26;
+          break;
+        }
+        case "unsupported": {
+          enum5 = 27;
+          break;
+        }
+        case "no-tty": {
+          enum5 = 28;
+          break;
+        }
+        case "no-such-device": {
+          enum5 = 29;
+          break;
+        }
+        case "overflow": {
+          enum5 = 30;
+          break;
+        }
+        case "not-permitted": {
+          enum5 = 31;
+          break;
+        }
+        case "pipe": {
+          enum5 = 32;
+          break;
+        }
+        case "read-only": {
+          enum5 = 33;
+          break;
+        }
+        case "invalid-seek": {
+          enum5 = 34;
+          break;
+        }
+        case "text-file-busy": {
+          enum5 = 35;
+          break;
+        }
+        case "cross-device": {
+          enum5 = 36;
+          break;
+        }
+        default: {
+          if (e instanceof Error) {
+            console.error(e);
+          }
+          throw new TypeError(`"${val5}" is not one of the cases of error-code`);
+        }
+      }
+      dataView(memory0).setInt8(arg2 + 4, enum5, true);
+      break;
+    }
+    default: {
+      _debugLog("ERROR: invalid value (expected result as object with 'tag' member)", { value: variant6, valueType: typeof variant6 });
+      throw new TypeError("invalid variant specified for result");
+    }
+  }
+  _debugLog('[iface="wasi:filesystem/types@0.2.3", function="[method]descriptor.write-via-stream"][Instruction::Return]', {
+    funcName: "[method]descriptor.write-via-stream",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline12.fnName = "wasi:filesystem/types@0.2.3#writeViaStream";
+var _trampoline13 = function(arg0, arg1) {
+  var handle1 = arg0;
+  var rep2 = handleTable3[(handle1 << 1) + 1] & ~T_FLAG;
+  var rsc0 = captureTable3.get(rep2);
+  if (!rsc0) {
+    rsc0 = Object.create(Descriptor3.prototype);
+    Object.defineProperty(rsc0, symbolRscHandle, { writable: true, value: handle1 });
+    Object.defineProperty(rsc0, symbolRscRep, { writable: true, value: rep2 });
+  }
+  curResourceBorrows.push(rsc0);
+  _debugLog('[iface="wasi:filesystem/types@0.2.3", function="[method]descriptor.append-via-stream"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "appendViaStream",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "result-catch-handler",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    const hostRet3 = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => rsc0.appendViaStream())
+    });
+    ret = hostRet3 !== null && typeof hostRet3 === "object" && (hostRet3.tag === "ok" || hostRet3.tag === "err") ? hostRet3 : { tag: "ok", val: hostRet3 };
+  } catch (e) {
+    if (getOrCreateAsyncState(0).markTrapped(e)) {
+      throw e;
+    }
+    ret = { tag: "err", val: getErrorPayload(e) };
+  }
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
+    rsc[symbolRscHandle] = void 0;
+  }
+  curResourceBorrows = [];
+  var variant6 = ret;
+  switch (variant6.tag) {
+    case "ok": {
+      const e = variant6.val;
+      dataView(memory0).setInt8(arg1 + 0, 0, true);
+      if (!(e instanceof OutputStream2)) {
+        throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+      }
+      var handle4 = e[symbolRscHandle];
+      if (!handle4) {
+        const rep3 = e[symbolRscRep] || ++captureCnt1;
+        captureTable1.set(rep3, e);
+        handle4 = rscTableCreateOwn(handleTable1, rep3);
+      }
+      dataView(memory0).setInt32(arg1 + 4, handle4, true);
+      break;
+    }
+    case "err": {
+      const e = variant6.val;
+      dataView(memory0).setInt8(arg1 + 0, 1, true);
+      var val5 = e;
+      let enum5;
+      switch (val5) {
+        case "access": {
+          enum5 = 0;
+          break;
+        }
+        case "would-block": {
+          enum5 = 1;
+          break;
+        }
+        case "already": {
+          enum5 = 2;
+          break;
+        }
+        case "bad-descriptor": {
+          enum5 = 3;
+          break;
+        }
+        case "busy": {
+          enum5 = 4;
+          break;
+        }
+        case "deadlock": {
+          enum5 = 5;
+          break;
+        }
+        case "quota": {
+          enum5 = 6;
+          break;
+        }
+        case "exist": {
+          enum5 = 7;
+          break;
+        }
+        case "file-too-large": {
+          enum5 = 8;
+          break;
+        }
+        case "illegal-byte-sequence": {
+          enum5 = 9;
+          break;
+        }
+        case "in-progress": {
+          enum5 = 10;
+          break;
+        }
+        case "interrupted": {
+          enum5 = 11;
+          break;
+        }
+        case "invalid": {
+          enum5 = 12;
+          break;
+        }
+        case "io": {
+          enum5 = 13;
+          break;
+        }
+        case "is-directory": {
+          enum5 = 14;
+          break;
+        }
+        case "loop": {
+          enum5 = 15;
+          break;
+        }
+        case "too-many-links": {
+          enum5 = 16;
+          break;
+        }
+        case "message-size": {
+          enum5 = 17;
+          break;
+        }
+        case "name-too-long": {
+          enum5 = 18;
+          break;
+        }
+        case "no-device": {
+          enum5 = 19;
+          break;
+        }
+        case "no-entry": {
+          enum5 = 20;
+          break;
+        }
+        case "no-lock": {
+          enum5 = 21;
+          break;
+        }
+        case "insufficient-memory": {
+          enum5 = 22;
+          break;
+        }
+        case "insufficient-space": {
+          enum5 = 23;
+          break;
+        }
+        case "not-directory": {
+          enum5 = 24;
+          break;
+        }
+        case "not-empty": {
+          enum5 = 25;
+          break;
+        }
+        case "not-recoverable": {
+          enum5 = 26;
+          break;
+        }
+        case "unsupported": {
+          enum5 = 27;
+          break;
+        }
+        case "no-tty": {
+          enum5 = 28;
+          break;
+        }
+        case "no-such-device": {
+          enum5 = 29;
+          break;
+        }
+        case "overflow": {
+          enum5 = 30;
+          break;
+        }
+        case "not-permitted": {
+          enum5 = 31;
+          break;
+        }
+        case "pipe": {
+          enum5 = 32;
+          break;
+        }
+        case "read-only": {
+          enum5 = 33;
+          break;
+        }
+        case "invalid-seek": {
+          enum5 = 34;
+          break;
+        }
+        case "text-file-busy": {
+          enum5 = 35;
+          break;
+        }
+        case "cross-device": {
+          enum5 = 36;
+          break;
+        }
+        default: {
+          if (e instanceof Error) {
+            console.error(e);
+          }
+          throw new TypeError(`"${val5}" is not one of the cases of error-code`);
+        }
+      }
+      dataView(memory0).setInt8(arg1 + 4, enum5, true);
+      break;
+    }
+    default: {
+      _debugLog("ERROR: invalid value (expected result as object with 'tag' member)", { value: variant6, valueType: typeof variant6 });
+      throw new TypeError("invalid variant specified for result");
+    }
+  }
+  _debugLog('[iface="wasi:filesystem/types@0.2.3", function="[method]descriptor.append-via-stream"][Instruction::Return]', {
+    funcName: "[method]descriptor.append-via-stream",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline13.fnName = "wasi:filesystem/types@0.2.3#appendViaStream";
+var _trampoline14 = function(arg0, arg1) {
+  var handle1 = arg0;
+  var rep2 = handleTable3[(handle1 << 1) + 1] & ~T_FLAG;
+  var rsc0 = captureTable3.get(rep2);
+  if (!rsc0) {
+    rsc0 = Object.create(Descriptor3.prototype);
+    Object.defineProperty(rsc0, symbolRscHandle, { writable: true, value: handle1 });
+    Object.defineProperty(rsc0, symbolRscRep, { writable: true, value: rep2 });
+  }
+  curResourceBorrows.push(rsc0);
+  _debugLog('[iface="wasi:filesystem/types@0.2.3", function="[method]descriptor.get-type"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "getType",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "result-catch-handler",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    const hostRet3 = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => rsc0.getType())
+    });
+    ret = hostRet3 !== null && typeof hostRet3 === "object" && (hostRet3.tag === "ok" || hostRet3.tag === "err") ? hostRet3 : { tag: "ok", val: hostRet3 };
+  } catch (e) {
+    if (getOrCreateAsyncState(0).markTrapped(e)) {
+      throw e;
+    }
+    ret = { tag: "err", val: getErrorPayload(e) };
+  }
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
+    rsc[symbolRscHandle] = void 0;
+  }
+  curResourceBorrows = [];
+  var variant6 = ret;
+  switch (variant6.tag) {
+    case "ok": {
+      const e = variant6.val;
+      dataView(memory0).setInt8(arg1 + 0, 0, true);
+      var val4 = e;
+      let enum4;
+      switch (val4) {
+        case "unknown": {
+          enum4 = 0;
+          break;
+        }
+        case "block-device": {
+          enum4 = 1;
+          break;
+        }
+        case "character-device": {
+          enum4 = 2;
+          break;
+        }
+        case "directory": {
+          enum4 = 3;
+          break;
+        }
+        case "fifo": {
+          enum4 = 4;
+          break;
+        }
+        case "symbolic-link": {
+          enum4 = 5;
+          break;
+        }
+        case "regular-file": {
+          enum4 = 6;
+          break;
+        }
+        case "socket": {
+          enum4 = 7;
+          break;
+        }
+        default: {
+          if (e instanceof Error) {
+            console.error(e);
+          }
+          throw new TypeError(`"${val4}" is not one of the cases of descriptor-type`);
+        }
+      }
+      dataView(memory0).setInt8(arg1 + 1, enum4, true);
+      break;
+    }
+    case "err": {
+      const e = variant6.val;
+      dataView(memory0).setInt8(arg1 + 0, 1, true);
+      var val5 = e;
+      let enum5;
+      switch (val5) {
+        case "access": {
+          enum5 = 0;
+          break;
+        }
+        case "would-block": {
+          enum5 = 1;
+          break;
+        }
+        case "already": {
+          enum5 = 2;
+          break;
+        }
+        case "bad-descriptor": {
+          enum5 = 3;
+          break;
+        }
+        case "busy": {
+          enum5 = 4;
+          break;
+        }
+        case "deadlock": {
+          enum5 = 5;
+          break;
+        }
+        case "quota": {
+          enum5 = 6;
+          break;
+        }
+        case "exist": {
+          enum5 = 7;
+          break;
+        }
+        case "file-too-large": {
+          enum5 = 8;
+          break;
+        }
+        case "illegal-byte-sequence": {
+          enum5 = 9;
+          break;
+        }
+        case "in-progress": {
+          enum5 = 10;
+          break;
+        }
+        case "interrupted": {
+          enum5 = 11;
+          break;
+        }
+        case "invalid": {
+          enum5 = 12;
+          break;
+        }
+        case "io": {
+          enum5 = 13;
+          break;
+        }
+        case "is-directory": {
+          enum5 = 14;
+          break;
+        }
+        case "loop": {
+          enum5 = 15;
+          break;
+        }
+        case "too-many-links": {
+          enum5 = 16;
+          break;
+        }
+        case "message-size": {
+          enum5 = 17;
+          break;
+        }
+        case "name-too-long": {
+          enum5 = 18;
+          break;
+        }
+        case "no-device": {
+          enum5 = 19;
+          break;
+        }
+        case "no-entry": {
+          enum5 = 20;
+          break;
+        }
+        case "no-lock": {
+          enum5 = 21;
+          break;
+        }
+        case "insufficient-memory": {
+          enum5 = 22;
+          break;
+        }
+        case "insufficient-space": {
+          enum5 = 23;
+          break;
+        }
+        case "not-directory": {
+          enum5 = 24;
+          break;
+        }
+        case "not-empty": {
+          enum5 = 25;
+          break;
+        }
+        case "not-recoverable": {
+          enum5 = 26;
+          break;
+        }
+        case "unsupported": {
+          enum5 = 27;
+          break;
+        }
+        case "no-tty": {
+          enum5 = 28;
+          break;
+        }
+        case "no-such-device": {
+          enum5 = 29;
+          break;
+        }
+        case "overflow": {
+          enum5 = 30;
+          break;
+        }
+        case "not-permitted": {
+          enum5 = 31;
+          break;
+        }
+        case "pipe": {
+          enum5 = 32;
+          break;
+        }
+        case "read-only": {
+          enum5 = 33;
+          break;
+        }
+        case "invalid-seek": {
+          enum5 = 34;
+          break;
+        }
+        case "text-file-busy": {
+          enum5 = 35;
+          break;
+        }
+        case "cross-device": {
+          enum5 = 36;
+          break;
+        }
+        default: {
+          if (e instanceof Error) {
+            console.error(e);
+          }
+          throw new TypeError(`"${val5}" is not one of the cases of error-code`);
+        }
+      }
+      dataView(memory0).setInt8(arg1 + 1, enum5, true);
+      break;
+    }
+    default: {
+      _debugLog("ERROR: invalid value (expected result as object with 'tag' member)", { value: variant6, valueType: typeof variant6 });
+      throw new TypeError("invalid variant specified for result");
+    }
+  }
+  _debugLog('[iface="wasi:filesystem/types@0.2.3", function="[method]descriptor.get-type"][Instruction::Return]', {
+    funcName: "[method]descriptor.get-type",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline14.fnName = "wasi:filesystem/types@0.2.3#getType";
+var _trampoline15 = function(arg0, arg1) {
+  var handle1 = arg0;
+  var rep2 = handleTable3[(handle1 << 1) + 1] & ~T_FLAG;
+  var rsc0 = captureTable3.get(rep2);
+  if (!rsc0) {
+    rsc0 = Object.create(Descriptor3.prototype);
+    Object.defineProperty(rsc0, symbolRscHandle, { writable: true, value: handle1 });
+    Object.defineProperty(rsc0, symbolRscRep, { writable: true, value: rep2 });
+  }
+  curResourceBorrows.push(rsc0);
+  _debugLog('[iface="wasi:filesystem/types@0.2.3", function="[method]descriptor.stat"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "stat",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "result-catch-handler",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    const hostRet3 = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => rsc0.stat())
+    });
+    ret = hostRet3 !== null && typeof hostRet3 === "object" && (hostRet3.tag === "ok" || hostRet3.tag === "err") ? hostRet3 : { tag: "ok", val: hostRet3 };
+  } catch (e) {
+    if (getOrCreateAsyncState(0).markTrapped(e)) {
+      throw e;
+    }
+    ret = { tag: "err", val: getErrorPayload(e) };
+  }
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
+    rsc[symbolRscHandle] = void 0;
+  }
+  curResourceBorrows = [];
+  var variant13 = ret;
+  switch (variant13.tag) {
+    case "ok": {
+      const e = variant13.val;
+      dataView(memory0).setInt8(arg1 + 0, 0, true);
+      var { type: v4_0, linkCount: v4_1, size: v4_2, dataAccessTimestamp: v4_3, dataModificationTimestamp: v4_4, statusChangeTimestamp: v4_5 } = e;
+      var val5 = v4_0;
+      let enum5;
+      switch (val5) {
+        case "unknown": {
+          enum5 = 0;
+          break;
+        }
+        case "block-device": {
+          enum5 = 1;
+          break;
+        }
+        case "character-device": {
+          enum5 = 2;
+          break;
+        }
+        case "directory": {
+          enum5 = 3;
+          break;
+        }
+        case "fifo": {
+          enum5 = 4;
+          break;
+        }
+        case "symbolic-link": {
+          enum5 = 5;
+          break;
+        }
+        case "regular-file": {
+          enum5 = 6;
+          break;
+        }
+        case "socket": {
+          enum5 = 7;
+          break;
+        }
+        default: {
+          if (v4_0 instanceof Error) {
+            console.error(v4_0);
+          }
+          throw new TypeError(`"${val5}" is not one of the cases of descriptor-type`);
+        }
+      }
+      dataView(memory0).setInt8(arg1 + 8, enum5, true);
+      dataView(memory0).setBigInt64(arg1 + 16, toUint64(v4_1), true);
+      dataView(memory0).setBigInt64(arg1 + 24, toUint64(v4_2), true);
+      var variant7 = v4_3;
+      if (variant7 === null || variant7 === void 0) {
+        dataView(memory0).setInt8(arg1 + 32, 0, true);
+      } else {
+        const e2 = variant7;
+        dataView(memory0).setInt8(arg1 + 32, 1, true);
+        var { seconds: v6_0, nanoseconds: v6_1 } = e2;
+        dataView(memory0).setBigInt64(arg1 + 40, toUint64(v6_0), true);
+        dataView(memory0).setInt32(arg1 + 48, toUint32(v6_1), true);
+      }
+      var variant9 = v4_4;
+      if (variant9 === null || variant9 === void 0) {
+        dataView(memory0).setInt8(arg1 + 56, 0, true);
+      } else {
+        const e2 = variant9;
+        dataView(memory0).setInt8(arg1 + 56, 1, true);
+        var { seconds: v8_0, nanoseconds: v8_1 } = e2;
+        dataView(memory0).setBigInt64(arg1 + 64, toUint64(v8_0), true);
+        dataView(memory0).setInt32(arg1 + 72, toUint32(v8_1), true);
+      }
+      var variant11 = v4_5;
+      if (variant11 === null || variant11 === void 0) {
+        dataView(memory0).setInt8(arg1 + 80, 0, true);
+      } else {
+        const e2 = variant11;
+        dataView(memory0).setInt8(arg1 + 80, 1, true);
+        var { seconds: v10_0, nanoseconds: v10_1 } = e2;
+        dataView(memory0).setBigInt64(arg1 + 88, toUint64(v10_0), true);
+        dataView(memory0).setInt32(arg1 + 96, toUint32(v10_1), true);
+      }
+      break;
+    }
+    case "err": {
+      const e = variant13.val;
+      dataView(memory0).setInt8(arg1 + 0, 1, true);
+      var val12 = e;
+      let enum12;
+      switch (val12) {
+        case "access": {
+          enum12 = 0;
+          break;
+        }
+        case "would-block": {
+          enum12 = 1;
+          break;
+        }
+        case "already": {
+          enum12 = 2;
+          break;
+        }
+        case "bad-descriptor": {
+          enum12 = 3;
+          break;
+        }
+        case "busy": {
+          enum12 = 4;
+          break;
+        }
+        case "deadlock": {
+          enum12 = 5;
+          break;
+        }
+        case "quota": {
+          enum12 = 6;
+          break;
+        }
+        case "exist": {
+          enum12 = 7;
+          break;
+        }
+        case "file-too-large": {
+          enum12 = 8;
+          break;
+        }
+        case "illegal-byte-sequence": {
+          enum12 = 9;
+          break;
+        }
+        case "in-progress": {
+          enum12 = 10;
+          break;
+        }
+        case "interrupted": {
+          enum12 = 11;
+          break;
+        }
+        case "invalid": {
+          enum12 = 12;
+          break;
+        }
+        case "io": {
+          enum12 = 13;
+          break;
+        }
+        case "is-directory": {
+          enum12 = 14;
+          break;
+        }
+        case "loop": {
+          enum12 = 15;
+          break;
+        }
+        case "too-many-links": {
+          enum12 = 16;
+          break;
+        }
+        case "message-size": {
+          enum12 = 17;
+          break;
+        }
+        case "name-too-long": {
+          enum12 = 18;
+          break;
+        }
+        case "no-device": {
+          enum12 = 19;
+          break;
+        }
+        case "no-entry": {
+          enum12 = 20;
+          break;
+        }
+        case "no-lock": {
+          enum12 = 21;
+          break;
+        }
+        case "insufficient-memory": {
+          enum12 = 22;
+          break;
+        }
+        case "insufficient-space": {
+          enum12 = 23;
+          break;
+        }
+        case "not-directory": {
+          enum12 = 24;
+          break;
+        }
+        case "not-empty": {
+          enum12 = 25;
+          break;
+        }
+        case "not-recoverable": {
+          enum12 = 26;
+          break;
+        }
+        case "unsupported": {
+          enum12 = 27;
+          break;
+        }
+        case "no-tty": {
+          enum12 = 28;
+          break;
+        }
+        case "no-such-device": {
+          enum12 = 29;
+          break;
+        }
+        case "overflow": {
+          enum12 = 30;
+          break;
+        }
+        case "not-permitted": {
+          enum12 = 31;
+          break;
+        }
+        case "pipe": {
+          enum12 = 32;
+          break;
+        }
+        case "read-only": {
+          enum12 = 33;
+          break;
+        }
+        case "invalid-seek": {
+          enum12 = 34;
+          break;
+        }
+        case "text-file-busy": {
+          enum12 = 35;
+          break;
+        }
+        case "cross-device": {
+          enum12 = 36;
+          break;
+        }
+        default: {
+          if (e instanceof Error) {
+            console.error(e);
+          }
+          throw new TypeError(`"${val12}" is not one of the cases of error-code`);
+        }
+      }
+      dataView(memory0).setInt8(arg1 + 8, enum12, true);
+      break;
+    }
+    default: {
+      _debugLog("ERROR: invalid value (expected result as object with 'tag' member)", { value: variant13, valueType: typeof variant13 });
+      throw new TypeError("invalid variant specified for result");
+    }
+  }
+  _debugLog('[iface="wasi:filesystem/types@0.2.3", function="[method]descriptor.stat"][Instruction::Return]', {
+    funcName: "[method]descriptor.stat",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline15.fnName = "wasi:filesystem/types@0.2.3#stat";
+var _trampoline16 = function(arg0, arg1) {
+  var handle1 = arg0;
+  var rep2 = handleTable1[(handle1 << 1) + 1] & ~T_FLAG;
+  var rsc0 = captureTable1.get(rep2);
+  if (!rsc0) {
+    rsc0 = Object.create(OutputStream2.prototype);
+    Object.defineProperty(rsc0, symbolRscHandle, { writable: true, value: handle1 });
+    Object.defineProperty(rsc0, symbolRscRep, { writable: true, value: rep2 });
+  }
+  curResourceBorrows.push(rsc0);
+  _debugLog('[iface="wasi:io/streams@0.2.3", function="[method]output-stream.check-write"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "checkWrite",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "result-catch-handler",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    const hostRet3 = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => rsc0.checkWrite())
+    });
+    ret = hostRet3 !== null && typeof hostRet3 === "object" && (hostRet3.tag === "ok" || hostRet3.tag === "err") ? hostRet3 : { tag: "ok", val: hostRet3 };
+  } catch (e) {
+    if (getOrCreateAsyncState(0).markTrapped(e)) {
+      throw e;
+    }
+    ret = { tag: "err", val: getErrorPayload(e) };
+  }
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
+    rsc[symbolRscHandle] = void 0;
+  }
+  curResourceBorrows = [];
+  var variant6 = ret;
+  switch (variant6.tag) {
+    case "ok": {
+      const e = variant6.val;
+      dataView(memory0).setInt8(arg1 + 0, 0, true);
+      dataView(memory0).setBigInt64(arg1 + 8, toUint64(e), true);
+      break;
+    }
+    case "err": {
+      const e = variant6.val;
+      dataView(memory0).setInt8(arg1 + 0, 1, true);
+      var variant5 = e;
+      switch (variant5.tag) {
+        case "last-operation-failed": {
+          const e2 = variant5.val;
+          dataView(memory0).setInt8(arg1 + 8, 0, true);
+          if (!(e2 instanceof Error$1)) {
+            throw new TypeError('Resource error: Not a valid "Error" resource.');
+          }
+          var handle4 = e2[symbolRscHandle];
+          if (!handle4) {
+            const rep3 = e2[symbolRscRep] || ++captureCnt0;
+            captureTable0.set(rep3, e2);
+            handle4 = rscTableCreateOwn(handleTable0, rep3);
+          }
+          dataView(memory0).setInt32(arg1 + 12, handle4, true);
+          break;
+        }
+        case "closed": {
+          dataView(memory0).setInt8(arg1 + 8, 1, true);
+          break;
+        }
+        default: {
+          throw new TypeError(`invalid variant tag value \`${JSON.stringify(variant5.tag)}\` (received \`${variant5}\`) specified for \`StreamError\``);
+        }
+      }
+      break;
+    }
+    default: {
+      _debugLog("ERROR: invalid value (expected result as object with 'tag' member)", { value: variant6, valueType: typeof variant6 });
+      throw new TypeError("invalid variant specified for result");
+    }
+  }
+  _debugLog('[iface="wasi:io/streams@0.2.3", function="[method]output-stream.check-write"][Instruction::Return]', {
+    funcName: "[method]output-stream.check-write",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline16.fnName = "wasi:io/streams@0.2.3#checkWrite";
+var _trampoline17 = function(arg0, arg1, arg2, arg3) {
+  var handle1 = arg0;
+  var rep2 = handleTable1[(handle1 << 1) + 1] & ~T_FLAG;
+  var rsc0 = captureTable1.get(rep2);
+  if (!rsc0) {
+    rsc0 = Object.create(OutputStream2.prototype);
+    Object.defineProperty(rsc0, symbolRscHandle, { writable: true, value: handle1 });
+    Object.defineProperty(rsc0, symbolRscRep, { writable: true, value: rep2 });
+  }
+  curResourceBorrows.push(rsc0);
+  var ptr3 = arg1;
+  var len3 = arg2;
+  if (ptr3 % 1 !== 0) throw new TypeError(`list pointer [${ptr3}] is not aligned to 1`);
+  var result3 = new Uint8Array(memory0.buffer.slice(ptr3, ptr3 + len3 * 1));
+  _debugLog('[iface="wasi:io/streams@0.2.3", function="[method]output-stream.write"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "write",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "result-catch-handler",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    const hostRet4 = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => rsc0.write(result3))
+    });
+    ret = hostRet4 !== null && typeof hostRet4 === "object" && (hostRet4.tag === "ok" || hostRet4.tag === "err") ? hostRet4 : { tag: "ok", val: hostRet4 };
+  } catch (e) {
+    if (getOrCreateAsyncState(0).markTrapped(e)) {
+      throw e;
+    }
+    ret = { tag: "err", val: getErrorPayload(e) };
+  }
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
+    rsc[symbolRscHandle] = void 0;
+  }
+  curResourceBorrows = [];
+  var variant7 = ret;
+  switch (variant7.tag) {
+    case "ok": {
+      const e = variant7.val;
+      dataView(memory0).setInt8(arg3 + 0, 0, true);
+      break;
+    }
+    case "err": {
+      const e = variant7.val;
+      dataView(memory0).setInt8(arg3 + 0, 1, true);
+      var variant6 = e;
+      switch (variant6.tag) {
+        case "last-operation-failed": {
+          const e2 = variant6.val;
+          dataView(memory0).setInt8(arg3 + 4, 0, true);
+          if (!(e2 instanceof Error$1)) {
+            throw new TypeError('Resource error: Not a valid "Error" resource.');
+          }
+          var handle5 = e2[symbolRscHandle];
+          if (!handle5) {
+            const rep3 = e2[symbolRscRep] || ++captureCnt0;
+            captureTable0.set(rep3, e2);
+            handle5 = rscTableCreateOwn(handleTable0, rep3);
+          }
+          dataView(memory0).setInt32(arg3 + 8, handle5, true);
+          break;
+        }
+        case "closed": {
+          dataView(memory0).setInt8(arg3 + 4, 1, true);
+          break;
+        }
+        default: {
+          throw new TypeError(`invalid variant tag value \`${JSON.stringify(variant6.tag)}\` (received \`${variant6}\`) specified for \`StreamError\``);
+        }
+      }
+      break;
+    }
+    default: {
+      _debugLog("ERROR: invalid value (expected result as object with 'tag' member)", { value: variant7, valueType: typeof variant7 });
+      throw new TypeError("invalid variant specified for result");
+    }
+  }
+  _debugLog('[iface="wasi:io/streams@0.2.3", function="[method]output-stream.write"][Instruction::Return]', {
+    funcName: "[method]output-stream.write",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline17.fnName = "wasi:io/streams@0.2.3#write";
+var _trampoline18 = function(arg0, arg1) {
+  var handle1 = arg0;
+  var rep2 = handleTable1[(handle1 << 1) + 1] & ~T_FLAG;
+  var rsc0 = captureTable1.get(rep2);
+  if (!rsc0) {
+    rsc0 = Object.create(OutputStream2.prototype);
+    Object.defineProperty(rsc0, symbolRscHandle, { writable: true, value: handle1 });
+    Object.defineProperty(rsc0, symbolRscRep, { writable: true, value: rep2 });
+  }
+  curResourceBorrows.push(rsc0);
+  _debugLog('[iface="wasi:io/streams@0.2.3", function="[method]output-stream.blocking-flush"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "blockingFlush",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "result-catch-handler",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    const hostRet3 = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => rsc0.blockingFlush())
+    });
+    ret = hostRet3 !== null && typeof hostRet3 === "object" && (hostRet3.tag === "ok" || hostRet3.tag === "err") ? hostRet3 : { tag: "ok", val: hostRet3 };
+  } catch (e) {
+    if (getOrCreateAsyncState(0).markTrapped(e)) {
+      throw e;
+    }
+    ret = { tag: "err", val: getErrorPayload(e) };
+  }
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
+    rsc[symbolRscHandle] = void 0;
+  }
+  curResourceBorrows = [];
+  var variant6 = ret;
+  switch (variant6.tag) {
+    case "ok": {
+      const e = variant6.val;
+      dataView(memory0).setInt8(arg1 + 0, 0, true);
+      break;
+    }
+    case "err": {
+      const e = variant6.val;
+      dataView(memory0).setInt8(arg1 + 0, 1, true);
+      var variant5 = e;
+      switch (variant5.tag) {
+        case "last-operation-failed": {
+          const e2 = variant5.val;
+          dataView(memory0).setInt8(arg1 + 4, 0, true);
+          if (!(e2 instanceof Error$1)) {
+            throw new TypeError('Resource error: Not a valid "Error" resource.');
+          }
+          var handle4 = e2[symbolRscHandle];
+          if (!handle4) {
+            const rep3 = e2[symbolRscRep] || ++captureCnt0;
+            captureTable0.set(rep3, e2);
+            handle4 = rscTableCreateOwn(handleTable0, rep3);
+          }
+          dataView(memory0).setInt32(arg1 + 8, handle4, true);
+          break;
+        }
+        case "closed": {
+          dataView(memory0).setInt8(arg1 + 4, 1, true);
+          break;
+        }
+        default: {
+          throw new TypeError(`invalid variant tag value \`${JSON.stringify(variant5.tag)}\` (received \`${variant5}\`) specified for \`StreamError\``);
+        }
+      }
+      break;
+    }
+    default: {
+      _debugLog("ERROR: invalid value (expected result as object with 'tag' member)", { value: variant6, valueType: typeof variant6 });
+      throw new TypeError("invalid variant specified for result");
+    }
+  }
+  _debugLog('[iface="wasi:io/streams@0.2.3", function="[method]output-stream.blocking-flush"][Instruction::Return]', {
+    funcName: "[method]output-stream.blocking-flush",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline18.fnName = "wasi:io/streams@0.2.3#blockingFlush";
+var _trampoline19 = function(arg0, arg1, arg2, arg3) {
+  var handle1 = arg0;
+  var rep2 = handleTable1[(handle1 << 1) + 1] & ~T_FLAG;
+  var rsc0 = captureTable1.get(rep2);
+  if (!rsc0) {
+    rsc0 = Object.create(OutputStream2.prototype);
+    Object.defineProperty(rsc0, symbolRscHandle, { writable: true, value: handle1 });
+    Object.defineProperty(rsc0, symbolRscRep, { writable: true, value: rep2 });
+  }
+  curResourceBorrows.push(rsc0);
+  var ptr3 = arg1;
+  var len3 = arg2;
+  if (ptr3 % 1 !== 0) throw new TypeError(`list pointer [${ptr3}] is not aligned to 1`);
+  var result3 = new Uint8Array(memory0.buffer.slice(ptr3, ptr3 + len3 * 1));
+  _debugLog('[iface="wasi:io/streams@0.2.3", function="[method]output-stream.blocking-write-and-flush"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "blockingWriteAndFlush",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "result-catch-handler",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    const hostRet4 = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => rsc0.blockingWriteAndFlush(result3))
+    });
+    ret = hostRet4 !== null && typeof hostRet4 === "object" && (hostRet4.tag === "ok" || hostRet4.tag === "err") ? hostRet4 : { tag: "ok", val: hostRet4 };
+  } catch (e) {
+    if (getOrCreateAsyncState(0).markTrapped(e)) {
+      throw e;
+    }
+    ret = { tag: "err", val: getErrorPayload(e) };
+  }
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
+    rsc[symbolRscHandle] = void 0;
+  }
+  curResourceBorrows = [];
+  var variant7 = ret;
+  switch (variant7.tag) {
+    case "ok": {
+      const e = variant7.val;
+      dataView(memory0).setInt8(arg3 + 0, 0, true);
+      break;
+    }
+    case "err": {
+      const e = variant7.val;
+      dataView(memory0).setInt8(arg3 + 0, 1, true);
+      var variant6 = e;
+      switch (variant6.tag) {
+        case "last-operation-failed": {
+          const e2 = variant6.val;
+          dataView(memory0).setInt8(arg3 + 4, 0, true);
+          if (!(e2 instanceof Error$1)) {
+            throw new TypeError('Resource error: Not a valid "Error" resource.');
+          }
+          var handle5 = e2[symbolRscHandle];
+          if (!handle5) {
+            const rep3 = e2[symbolRscRep] || ++captureCnt0;
+            captureTable0.set(rep3, e2);
+            handle5 = rscTableCreateOwn(handleTable0, rep3);
+          }
+          dataView(memory0).setInt32(arg3 + 8, handle5, true);
+          break;
+        }
+        case "closed": {
+          dataView(memory0).setInt8(arg3 + 4, 1, true);
+          break;
+        }
+        default: {
+          throw new TypeError(`invalid variant tag value \`${JSON.stringify(variant6.tag)}\` (received \`${variant6}\`) specified for \`StreamError\``);
+        }
+      }
+      break;
+    }
+    default: {
+      _debugLog("ERROR: invalid value (expected result as object with 'tag' member)", { value: variant7, valueType: typeof variant7 });
+      throw new TypeError("invalid variant specified for result");
+    }
+  }
+  _debugLog('[iface="wasi:io/streams@0.2.3", function="[method]output-stream.blocking-write-and-flush"][Instruction::Return]', {
+    funcName: "[method]output-stream.blocking-write-and-flush",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline19.fnName = "wasi:io/streams@0.2.3#blockingWriteAndFlush";
+var _trampoline20 = function(arg0, arg1) {
+  _debugLog('[iface="wasi:random/random@0.2.3", function="get-random-bytes"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "getRandomBytes",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "none",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    ret = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => getRandomBytes(BigInt.asUintN(64, BigInt(arg0))))
+    });
+  } catch (err) {
+    _debugLog("[Instruction::CallInterface] error during sync call", {
+      taskID: task.id(),
+      subtaskID: task.getParentSubtask()?.id(),
+      err
+    });
+    getOrCreateAsyncState(0).markTrapped(err);
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+  }
+  var val0 = ret;
+  var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+  var ptr0 = realloc0(0, 0, 1, len0 * 1);
+  let valData0;
+  const valLenBytes0 = len0 * 1;
+  if (Array.isArray(val0)) {
+    let offset = 0;
+    const dv0 = new DataView(memory0.buffer);
+    for (const v of val0) {
+      _requireValidNumericPrimitive.bind(null, "u8")(v);
+      dv0.setUint8(ptr0 + offset, v, true);
+      offset += 1;
+    }
+  } else {
+    valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+    const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+    out0.set(valData0);
+  }
+  dataView(memory0).setUint32(arg1 + 4, len0, true);
+  dataView(memory0).setUint32(arg1 + 0, ptr0, true);
+  _debugLog('[iface="wasi:random/random@0.2.3", function="get-random-bytes"][Instruction::Return]', {
+    funcName: "get-random-bytes",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline20.fnName = "wasi:random/random@0.2.3#getRandomBytes";
+var _trampoline21 = function(arg0) {
+  _debugLog('[iface="wasi:filesystem/preopens@0.2.3", function="get-directories"] [Instruction::CallInterface] (sync, @ enter)');
+  const hostProvided = true;
+  let parentTask;
+  let task;
+  let subtask;
+  const createTask = () => {
+    const results = createNewCurrentTask({
+      componentIdx: -1,
+      isAsync: false,
+      entryFnName: "getDirectories",
+      getCallbackFn: () => null,
+      callbackFnName: null,
+      errHandling: "none",
+      callingWasmExport: false
+    });
+    task = results[0];
+  };
+  taskCreation: {
+    parentTask = getCurrentTask(
+      0,
+      _getGlobalCurrentTaskMeta(0)?.taskID
+    )?.task;
+    if (!parentTask) {
+      createTask();
+      break taskCreation;
+    }
+    createTask();
+    if (hostProvided) {
+      subtask = parentTask.getLatestSubtask();
+      if (!subtask) {
+        throw new Error(`Missing subtask (in parent task [${parentTask.id()}]) for host import, has the import been lowered? (ensure asyncImports are set properly)`);
+      }
+      task.setParentSubtask(subtask);
+    }
+  }
+  const started = task.enterSync();
+  let ret;
+  try {
+    ret = _withGlobalCurrentTaskMeta({
+      componentIdx: task.componentIdx(),
+      taskID: task.id(),
+      fn: () => _trackHostOperation(() => getDirectories())
+    });
+  } catch (err) {
+    _debugLog("[Instruction::CallInterface] error during sync call", {
+      taskID: task.id(),
+      subtaskID: task.getParentSubtask()?.id(),
+      err
+    });
+    getOrCreateAsyncState(0).markTrapped(err);
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+  }
+  var vec3 = ret;
+  var len3 = vec3.length;
+  var result3 = realloc0(0, 0, 4, len3 * 12);
+  for (let i = 0; i < vec3.length; i++) {
+    const e = vec3[i];
+    const base = result3 + i * 12;
+    var [tuple0_0, tuple0_1] = e;
+    if (!(tuple0_0 instanceof Descriptor3)) {
+      throw new TypeError('Resource error: Not a valid "Descriptor" resource.');
+    }
+    var handle1 = tuple0_0[symbolRscHandle];
+    if (!handle1) {
+      const rep2 = tuple0_0[symbolRscRep] || ++captureCnt3;
+      captureTable3.set(rep2, tuple0_0);
+      handle1 = rscTableCreateOwn(handleTable3, rep2);
+    }
+    dataView(memory0).setInt32(base + 0, handle1, true);
+    var encodeRes = _utf8AllocateAndEncode(tuple0_1, realloc0, memory0);
+    var ptr2 = encodeRes.ptr;
+    var len2 = encodeRes.len;
+    dataView(memory0).setUint32(base + 8, len2, true);
+    dataView(memory0).setUint32(base + 4, ptr2, true);
+  }
+  dataView(memory0).setUint32(arg0 + 4, len3, true);
+  dataView(memory0).setUint32(arg0 + 0, result3, true);
+  _debugLog('[iface="wasi:filesystem/preopens@0.2.3", function="get-directories"][Instruction::Return]', {
+    funcName: "get-directories",
+    paramCount: 0,
+    async: false,
+    postReturn: false
+  });
+  task.resolve([ret]);
+  task.exit();
+};
+_trampoline21.fnName = "wasi:filesystem/preopens@0.2.3#getDirectories";
+var exports3;
+var realloc1;
+var realloc1Async;
 var postReturn0;
 var postReturn0Async;
-var protocolDecode;
-function decode(arg0) {
+var postReturn1;
+var postReturn1Async;
+var postReturn2;
+var postReturn2Async;
+var postReturn3;
+var postReturn3Async;
+var postReturn4;
+var postReturn4Async;
+var protocolEncodeBytes;
+function encodeBytes(arg0, arg1) {
   const hostProvided = false;
   getOrCreateAsyncState(0).throwIfTrapped();
   const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
@@ -2356,10 +7445,10 @@ function decode(arg0) {
     isAsync: false,
     isManualAsync: false,
     preserveFutureResult: false,
-    entryFnName: "protocolDecode",
+    entryFnName: "protocolEncodeBytes",
     getCallbackFn: () => null,
     callbackFnName: null,
-    errHandling: "none",
+    errHandling: "throw-result-err",
     callingWasmExport: true
   });
   task.setCalleeIsAsync(false);
@@ -2376,7 +7465,7 @@ function decode(arg0) {
       try {
         var val0 = arg0;
         var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
-        var ptr0 = realloc0(0, 0, 1, len0 * 1);
+        var ptr0 = realloc1(0, 0, 1, len0 * 1);
         let valData0;
         const valLenBytes0 = len0 * 1;
         if (Array.isArray(val0)) {
@@ -2392,9 +7481,9 @@ function decode(arg0) {
           const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
           out0.set(valData0);
         }
-        _debugLog('[iface="snows:qr-data-transport/protocol", function="decode"][Instruction::CallWasm] enter', {
-          funcName: "decode",
-          paramCount: 2,
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="encode-bytes"][Instruction::CallWasm] enter', {
+          funcName: "encode-bytes",
+          paramCount: 3,
           async: false,
           postReturn: true
         });
@@ -2403,7 +7492,7 @@ function decode(arg0) {
           ret = _withGlobalCurrentTaskMeta({
             taskID: task.id(),
             componentIdx: task.componentIdx(),
-            fn: () => protocolDecode(ptr0, len0)
+            fn: () => protocolEncodeBytes(ptr0, len0, toUint32(arg1))
           });
         } catch (err) {
           _debugLog("[Instruction::CallWasm] error during sync call", {
@@ -2416,24 +7505,64 @@ function decode(arg0) {
           task.exit();
           throw err;
         }
-        var ptr1 = dataView(memory0).getUint32(ret + 0, true);
-        var len1 = dataView(memory0).getUint32(ret + 4, true);
-        if (ptr1 % 1 !== 0) throw new TypeError(`list pointer [${ptr1}] is not aligned to 1`);
-        var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
-        _debugLog('[iface="snows:qr-data-transport/protocol", function="decode"][Instruction::Return]', {
-          funcName: "decode",
+        let variant4;
+        switch (dataView(memory0).getUint8(ret + 0, true)) {
+          case 0: {
+            var len2 = dataView(memory0).getUint32(ret + 8, true);
+            var base2 = dataView(memory0).getUint32(ret + 4, true);
+            if (base2 % 4 !== 0) throw new TypeError(`list pointer [${base2}] is not aligned to 4`);
+            var result2 = [];
+            for (let i = 0; i < len2; i++) {
+              const base = base2 + i * 16;
+              var ptr1 = dataView(memory0).getUint32(base + 0, true);
+              var len1 = dataView(memory0).getUint32(base + 4, true);
+              if (ptr1 % 1 !== 0) throw new TypeError(`list pointer [${ptr1}] is not aligned to 1`);
+              var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
+              result2.push({
+                wireBytes: result1,
+                frameNumber: dataView(memory0).getInt32(base + 8, true) >>> 0,
+                totalQrCount: dataView(memory0).getInt32(base + 12, true) >>> 0
+              });
+            }
+            variant4 = {
+              tag: "ok",
+              val: {
+                frames: result2
+              }
+            };
+            break;
+          }
+          case 1: {
+            var ptr3 = dataView(memory0).getUint32(ret + 4, true);
+            var len3 = dataView(memory0).getUint32(ret + 8, true);
+            var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+            variant4 = {
+              tag: "err",
+              val: result3
+            };
+            break;
+          }
+          default: {
+            throw new TypeError("invalid variant discriminant for expected");
+          }
+        }
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="encode-bytes"][Instruction::Return]', {
+          funcName: "encode-bytes",
           paramCount: 1,
           async: false,
           postReturn: true
         });
-        task.resolve([result1]);
-        const retCopy = result1;
+        const retCopy = variant4;
+        task.resolve([retCopy.val]);
         let cstate = getOrCreateAsyncState(0);
         cstate.mayLeave = false;
         postReturn0(ret);
         cstate.mayLeave = true;
         task.exit();
-        return retCopy;
+        if (typeof retCopy === "object" && retCopy.tag === "err") {
+          throw new ComponentError(retCopy.val);
+        }
+        return retCopy.val;
       } catch (err) {
         if (!task.isResolvedState()) {
           task.setErrored(err);
@@ -2447,24 +7576,2567 @@ function decode(arg0) {
     }
   });
 }
+var protocolEncodeText;
+function encodeText(arg0, arg1) {
+  const hostProvided = false;
+  getOrCreateAsyncState(0).throwIfTrapped();
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    preserveFutureResult: false,
+    entryFnName: "protocolEncodeText",
+    getCallbackFn: () => null,
+    callbackFnName: null,
+    errHandling: "throw-result-err",
+    callingWasmExport: true
+  });
+  task.setCalleeIsAsync(false);
+  const started = task.enterSync();
+  CURRENT_TASK_MAY_BLOCK.value = task.mayBlock() ? 1 : 0;
+  if (true) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(/* @__PURE__ */ (() => memory0)());
+  }
+  return _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => {
+      try {
+        var encodeRes = _utf8AllocateAndEncode(arg0, realloc1, memory0);
+        var ptr0 = encodeRes.ptr;
+        var len0 = encodeRes.len;
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="encode-text"][Instruction::CallWasm] enter', {
+          funcName: "encode-text",
+          paramCount: 3,
+          async: false,
+          postReturn: true
+        });
+        let ret;
+        try {
+          ret = _withGlobalCurrentTaskMeta({
+            taskID: task.id(),
+            componentIdx: task.componentIdx(),
+            fn: () => protocolEncodeText(ptr0, len0, toUint32(arg1))
+          });
+        } catch (err) {
+          _debugLog("[Instruction::CallWasm] error during sync call", {
+            taskID: task.id(),
+            err
+          });
+          getOrCreateAsyncState(0).markTrapped(err);
+          task.setErrored(err);
+          task.reject(err);
+          task.exit();
+          throw err;
+        }
+        let variant4;
+        switch (dataView(memory0).getUint8(ret + 0, true)) {
+          case 0: {
+            var len2 = dataView(memory0).getUint32(ret + 8, true);
+            var base2 = dataView(memory0).getUint32(ret + 4, true);
+            if (base2 % 4 !== 0) throw new TypeError(`list pointer [${base2}] is not aligned to 4`);
+            var result2 = [];
+            for (let i = 0; i < len2; i++) {
+              const base = base2 + i * 16;
+              var ptr1 = dataView(memory0).getUint32(base + 0, true);
+              var len1 = dataView(memory0).getUint32(base + 4, true);
+              if (ptr1 % 1 !== 0) throw new TypeError(`list pointer [${ptr1}] is not aligned to 1`);
+              var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
+              result2.push({
+                wireBytes: result1,
+                frameNumber: dataView(memory0).getInt32(base + 8, true) >>> 0,
+                totalQrCount: dataView(memory0).getInt32(base + 12, true) >>> 0
+              });
+            }
+            variant4 = {
+              tag: "ok",
+              val: {
+                frames: result2
+              }
+            };
+            break;
+          }
+          case 1: {
+            var ptr3 = dataView(memory0).getUint32(ret + 4, true);
+            var len3 = dataView(memory0).getUint32(ret + 8, true);
+            var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+            variant4 = {
+              tag: "err",
+              val: result3
+            };
+            break;
+          }
+          default: {
+            throw new TypeError("invalid variant discriminant for expected");
+          }
+        }
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="encode-text"][Instruction::Return]', {
+          funcName: "encode-text",
+          paramCount: 1,
+          async: false,
+          postReturn: true
+        });
+        const retCopy = variant4;
+        task.resolve([retCopy.val]);
+        let cstate = getOrCreateAsyncState(0);
+        cstate.mayLeave = false;
+        postReturn0(ret);
+        cstate.mayLeave = true;
+        task.exit();
+        if (typeof retCopy === "object" && retCopy.tag === "err") {
+          throw new ComponentError(retCopy.val);
+        }
+        return retCopy.val;
+      } catch (err) {
+        if (!task.isResolvedState()) {
+          task.setErrored(err);
+          task.reject(err);
+        }
+        if (!task.isExited()) {
+          task.exit({ skipExclusiveLockCheck: true });
+        }
+        throw err;
+      }
+    }
+  });
+}
+var protocolParseFrame;
+function parseFrame(arg0, arg1, arg2) {
+  const hostProvided = false;
+  getOrCreateAsyncState(0).throwIfTrapped();
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    preserveFutureResult: false,
+    entryFnName: "protocolParseFrame",
+    getCallbackFn: () => null,
+    callbackFnName: null,
+    errHandling: "throw-result-err",
+    callingWasmExport: true
+  });
+  task.setCalleeIsAsync(false);
+  const started = task.enterSync();
+  CURRENT_TASK_MAY_BLOCK.value = task.mayBlock() ? 1 : 0;
+  if (true) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(/* @__PURE__ */ (() => memory0)());
+  }
+  return _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => {
+      try {
+        var val0 = arg0;
+        var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+        var ptr0 = realloc1(0, 0, 1, len0 * 1);
+        let valData0;
+        const valLenBytes0 = len0 * 1;
+        if (Array.isArray(val0)) {
+          let offset = 0;
+          const dv0 = new DataView(memory0.buffer);
+          for (const v of val0) {
+            _requireValidNumericPrimitive.bind(null, "u8")(v);
+            dv0.setUint8(ptr0 + offset, v, true);
+            offset += 1;
+          }
+        } else {
+          valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+          const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+          out0.set(valData0);
+        }
+        var variant1 = arg1;
+        let variant1_0;
+        let variant1_1;
+        if (variant1 === null || variant1 === void 0) {
+          variant1_0 = 0;
+          variant1_1 = 0;
+        } else {
+          const e = variant1;
+          variant1_0 = 1;
+          variant1_1 = toUint32(e);
+        }
+        var variant2 = arg2;
+        let variant2_0;
+        let variant2_1;
+        if (variant2 === null || variant2 === void 0) {
+          variant2_0 = 0;
+          variant2_1 = 0;
+        } else {
+          const e = variant2;
+          variant2_0 = 1;
+          variant2_1 = toUint16(e);
+        }
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="parse-frame"][Instruction::CallWasm] enter', {
+          funcName: "parse-frame",
+          paramCount: 6,
+          async: false,
+          postReturn: true
+        });
+        let ret;
+        try {
+          ret = _withGlobalCurrentTaskMeta({
+            taskID: task.id(),
+            componentIdx: task.componentIdx(),
+            fn: () => protocolParseFrame(ptr0, len0, variant1_0, variant1_1, variant2_0, variant2_1)
+          });
+        } catch (err) {
+          _debugLog("[Instruction::CallWasm] error during sync call", {
+            taskID: task.id(),
+            err
+          });
+          getOrCreateAsyncState(0).markTrapped(err);
+          task.setErrored(err);
+          task.reject(err);
+          task.exit();
+          throw err;
+        }
+        let variant9;
+        switch (dataView(memory0).getUint8(ret + 0, true)) {
+          case 0: {
+            var bool3 = dataView(memory0).getUint8(ret + 4, true);
+            let variant5;
+            switch (dataView(memory0).getUint8(ret + 16, true)) {
+              case 0: {
+                variant5 = void 0;
+                break;
+              }
+              case 1: {
+                let enum4;
+                switch (dataView(memory0).getUint8(ret + 17, true)) {
+                  case 0: {
+                    enum4 = "uint8array";
+                    break;
+                  }
+                  case 1: {
+                    enum4 = "bytes-string";
+                    break;
+                  }
+                  default: {
+                    throw new TypeError("invalid discriminant specified for DataType");
+                  }
+                }
+                variant5 = enum4;
+                break;
+              }
+              default: {
+                throw new TypeError("invalid variant discriminant for option");
+              }
+            }
+            let variant6;
+            switch (dataView(memory0).getUint8(ret + 28, true)) {
+              case 0: {
+                variant6 = void 0;
+                break;
+              }
+              case 1: {
+                variant6 = dataView(memory0).getInt32(ret + 32, true) >>> 0;
+                break;
+              }
+              default: {
+                throw new TypeError("invalid variant discriminant for option");
+              }
+            }
+            var bool7 = dataView(memory0).getUint8(ret + 36, true);
+            variant9 = {
+              tag: "ok",
+              val: {
+                isFirst: bool3 == 0 ? false : bool3 == 1 ? true : throwInvalidBool(),
+                version: clampGuest(dataView(memory0).getUint8(ret + 5, true), 0, 255),
+                totalQrCount: dataView(memory0).getInt32(ret + 8, true) >>> 0,
+                frameNumber: dataView(memory0).getInt32(ret + 12, true) >>> 0,
+                dataType: variant5,
+                payloadBitLen: dataView(memory0).getInt32(ret + 20, true) >>> 0,
+                frameCrc: clampGuest(dataView(memory0).getUint16(ret + 24, true), 0, 65535),
+                overallCrc: variant6,
+                crcValid: bool7 == 0 ? false : bool7 == 1 ? true : throwInvalidBool()
+              }
+            };
+            break;
+          }
+          case 1: {
+            var ptr8 = dataView(memory0).getUint32(ret + 4, true);
+            var len8 = dataView(memory0).getUint32(ret + 8, true);
+            var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+            variant9 = {
+              tag: "err",
+              val: result8
+            };
+            break;
+          }
+          default: {
+            throw new TypeError("invalid variant discriminant for expected");
+          }
+        }
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="parse-frame"][Instruction::Return]', {
+          funcName: "parse-frame",
+          paramCount: 1,
+          async: false,
+          postReturn: true
+        });
+        const retCopy = variant9;
+        task.resolve([retCopy.val]);
+        let cstate = getOrCreateAsyncState(0);
+        cstate.mayLeave = false;
+        postReturn1(ret);
+        cstate.mayLeave = true;
+        task.exit();
+        if (typeof retCopy === "object" && retCopy.tag === "err") {
+          throw new ComponentError(retCopy.val);
+        }
+        return retCopy.val;
+      } catch (err) {
+        if (!task.isResolvedState()) {
+          task.setErrored(err);
+          task.reject(err);
+        }
+        if (!task.isExited()) {
+          task.exit({ skipExclusiveLockCheck: true });
+        }
+        throw err;
+      }
+    }
+  });
+}
+var protocolDecodeFrames;
+function decodeFrames(arg0) {
+  const hostProvided = false;
+  getOrCreateAsyncState(0).throwIfTrapped();
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    preserveFutureResult: false,
+    entryFnName: "protocolDecodeFrames",
+    getCallbackFn: () => null,
+    callbackFnName: null,
+    errHandling: "throw-result-err",
+    callingWasmExport: true
+  });
+  task.setCalleeIsAsync(false);
+  const started = task.enterSync();
+  CURRENT_TASK_MAY_BLOCK.value = task.mayBlock() ? 1 : 0;
+  if (true) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(/* @__PURE__ */ (() => memory0)());
+  }
+  return _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => {
+      try {
+        var vec1 = arg0;
+        var len1 = vec1.length;
+        var result1 = realloc1(0, 0, 4, len1 * 8);
+        for (let i = 0; i < vec1.length; i++) {
+          const e = vec1[i];
+          const base = result1 + i * 8;
+          var val0 = e;
+          var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+          var ptr0 = realloc1(0, 0, 1, len0 * 1);
+          let valData0;
+          const valLenBytes0 = len0 * 1;
+          if (Array.isArray(val0)) {
+            let offset = 0;
+            const dv0 = new DataView(memory0.buffer);
+            for (const v of val0) {
+              _requireValidNumericPrimitive.bind(null, "u8")(v);
+              dv0.setUint8(ptr0 + offset, v, true);
+              offset += 1;
+            }
+          } else {
+            valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+            const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+            out0.set(valData0);
+          }
+          dataView(memory0).setUint32(base + 4, len0, true);
+          dataView(memory0).setUint32(base + 0, ptr0, true);
+        }
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="decode-frames"][Instruction::CallWasm] enter', {
+          funcName: "decode-frames",
+          paramCount: 2,
+          async: false,
+          postReturn: true
+        });
+        let ret;
+        try {
+          ret = _withGlobalCurrentTaskMeta({
+            taskID: task.id(),
+            componentIdx: task.componentIdx(),
+            fn: () => protocolDecodeFrames(result1, len1)
+          });
+        } catch (err) {
+          _debugLog("[Instruction::CallWasm] error during sync call", {
+            taskID: task.id(),
+            err
+          });
+          getOrCreateAsyncState(0).markTrapped(err);
+          task.setErrored(err);
+          task.reject(err);
+          task.exit();
+          throw err;
+        }
+        let variant6;
+        switch (dataView(memory0).getUint8(ret + 0, true)) {
+          case 0: {
+            let variant4;
+            switch (dataView(memory0).getUint8(ret + 4, true)) {
+              case 0: {
+                var ptr2 = dataView(memory0).getUint32(ret + 8, true);
+                var len2 = dataView(memory0).getUint32(ret + 12, true);
+                if (ptr2 % 1 !== 0) throw new TypeError(`list pointer [${ptr2}] is not aligned to 1`);
+                var result2 = new Uint8Array(memory0.buffer.slice(ptr2, ptr2 + len2 * 1));
+                variant4 = {
+                  tag: "bytes",
+                  val: result2
+                };
+                break;
+              }
+              case 1: {
+                var ptr3 = dataView(memory0).getUint32(ret + 8, true);
+                var len3 = dataView(memory0).getUint32(ret + 12, true);
+                var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+                variant4 = {
+                  tag: "text",
+                  val: result3
+                };
+                break;
+              }
+              default: {
+                throw new TypeError("invalid variant discriminant for DecodedPayload");
+              }
+            }
+            variant6 = {
+              tag: "ok",
+              val: variant4
+            };
+            break;
+          }
+          case 1: {
+            var ptr5 = dataView(memory0).getUint32(ret + 4, true);
+            var len5 = dataView(memory0).getUint32(ret + 8, true);
+            var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+            variant6 = {
+              tag: "err",
+              val: result5
+            };
+            break;
+          }
+          default: {
+            throw new TypeError("invalid variant discriminant for expected");
+          }
+        }
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="decode-frames"][Instruction::Return]', {
+          funcName: "decode-frames",
+          paramCount: 1,
+          async: false,
+          postReturn: true
+        });
+        const retCopy = variant6;
+        task.resolve([retCopy.val]);
+        let cstate = getOrCreateAsyncState(0);
+        cstate.mayLeave = false;
+        postReturn2(ret);
+        cstate.mayLeave = true;
+        task.exit();
+        if (typeof retCopy === "object" && retCopy.tag === "err") {
+          throw new ComponentError(retCopy.val);
+        }
+        return retCopy.val;
+      } catch (err) {
+        if (!task.isResolvedState()) {
+          task.setErrored(err);
+          task.reject(err);
+        }
+        if (!task.isExited()) {
+          task.exit({ skipExclusiveLockCheck: true });
+        }
+        throw err;
+      }
+    }
+  });
+}
+var protocolGenerateQrMatrix;
+function generateQrMatrix(arg0, arg1, arg2) {
+  const hostProvided = false;
+  getOrCreateAsyncState(0).throwIfTrapped();
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    preserveFutureResult: false,
+    entryFnName: "protocolGenerateQrMatrix",
+    getCallbackFn: () => null,
+    callbackFnName: null,
+    errHandling: "throw-result-err",
+    callingWasmExport: true
+  });
+  task.setCalleeIsAsync(false);
+  const started = task.enterSync();
+  CURRENT_TASK_MAY_BLOCK.value = task.mayBlock() ? 1 : 0;
+  if (true) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(/* @__PURE__ */ (() => memory0)());
+  }
+  return _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => {
+      try {
+        var val0 = arg0;
+        var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+        var ptr0 = realloc1(0, 0, 1, len0 * 1);
+        let valData0;
+        const valLenBytes0 = len0 * 1;
+        if (Array.isArray(val0)) {
+          let offset = 0;
+          const dv0 = new DataView(memory0.buffer);
+          for (const v of val0) {
+            _requireValidNumericPrimitive.bind(null, "u8")(v);
+            dv0.setUint8(ptr0 + offset, v, true);
+            offset += 1;
+          }
+        } else {
+          valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+          const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+          out0.set(valData0);
+        }
+        var val1 = arg2;
+        let enum1;
+        switch (val1) {
+          case "l": {
+            enum1 = 0;
+            break;
+          }
+          case "m": {
+            enum1 = 1;
+            break;
+          }
+          case "q": {
+            enum1 = 2;
+            break;
+          }
+          case "h": {
+            enum1 = 3;
+            break;
+          }
+          default: {
+            if (arg2 instanceof Error) {
+              console.error(arg2);
+            }
+            throw new TypeError(`"${val1}" is not one of the cases of qr-ec-level`);
+          }
+        }
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="generate-qr-matrix"][Instruction::CallWasm] enter', {
+          funcName: "generate-qr-matrix",
+          paramCount: 4,
+          async: false,
+          postReturn: true
+        });
+        let ret;
+        try {
+          ret = _withGlobalCurrentTaskMeta({
+            taskID: task.id(),
+            componentIdx: task.componentIdx(),
+            fn: () => protocolGenerateQrMatrix(ptr0, len0, toUint8(arg1), enum1)
+          });
+        } catch (err) {
+          _debugLog("[Instruction::CallWasm] error during sync call", {
+            taskID: task.id(),
+            err
+          });
+          getOrCreateAsyncState(0).markTrapped(err);
+          task.setErrored(err);
+          task.reject(err);
+          task.exit();
+          throw err;
+        }
+        let variant4;
+        switch (dataView(memory0).getUint8(ret + 0, true)) {
+          case 0: {
+            var ptr2 = dataView(memory0).getUint32(ret + 12, true);
+            var len2 = dataView(memory0).getUint32(ret + 16, true);
+            if (ptr2 % 1 !== 0) throw new TypeError(`list pointer [${ptr2}] is not aligned to 1`);
+            var result2 = new Uint8Array(memory0.buffer.slice(ptr2, ptr2 + len2 * 1));
+            variant4 = {
+              tag: "ok",
+              val: {
+                width: dataView(memory0).getInt32(ret + 4, true) >>> 0,
+                height: dataView(memory0).getInt32(ret + 8, true) >>> 0,
+                modules: result2
+              }
+            };
+            break;
+          }
+          case 1: {
+            var ptr3 = dataView(memory0).getUint32(ret + 4, true);
+            var len3 = dataView(memory0).getUint32(ret + 8, true);
+            var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+            variant4 = {
+              tag: "err",
+              val: result3
+            };
+            break;
+          }
+          default: {
+            throw new TypeError("invalid variant discriminant for expected");
+          }
+        }
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="generate-qr-matrix"][Instruction::Return]', {
+          funcName: "generate-qr-matrix",
+          paramCount: 1,
+          async: false,
+          postReturn: true
+        });
+        const retCopy = variant4;
+        task.resolve([retCopy.val]);
+        let cstate = getOrCreateAsyncState(0);
+        cstate.mayLeave = false;
+        postReturn3(ret);
+        cstate.mayLeave = true;
+        task.exit();
+        if (typeof retCopy === "object" && retCopy.tag === "err") {
+          throw new ComponentError(retCopy.val);
+        }
+        return retCopy.val;
+      } catch (err) {
+        if (!task.isResolvedState()) {
+          task.setErrored(err);
+          task.reject(err);
+        }
+        if (!task.isExited()) {
+          task.exit({ skipExclusiveLockCheck: true });
+        }
+        throw err;
+      }
+    }
+  });
+}
+var protocolDecodeQrImage;
+function decodeQrImage(arg0, arg1, arg2) {
+  const hostProvided = false;
+  getOrCreateAsyncState(0).throwIfTrapped();
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    preserveFutureResult: false,
+    entryFnName: "protocolDecodeQrImage",
+    getCallbackFn: () => null,
+    callbackFnName: null,
+    errHandling: "throw-result-err",
+    callingWasmExport: true
+  });
+  task.setCalleeIsAsync(false);
+  const started = task.enterSync();
+  CURRENT_TASK_MAY_BLOCK.value = task.mayBlock() ? 1 : 0;
+  if (true) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(/* @__PURE__ */ (() => memory0)());
+  }
+  return _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => {
+      try {
+        var val0 = arg0;
+        var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+        var ptr0 = realloc1(0, 0, 1, len0 * 1);
+        let valData0;
+        const valLenBytes0 = len0 * 1;
+        if (Array.isArray(val0)) {
+          let offset = 0;
+          const dv0 = new DataView(memory0.buffer);
+          for (const v of val0) {
+            _requireValidNumericPrimitive.bind(null, "u8")(v);
+            dv0.setUint8(ptr0 + offset, v, true);
+            offset += 1;
+          }
+        } else {
+          valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+          const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+          out0.set(valData0);
+        }
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="decode-qr-image"][Instruction::CallWasm] enter', {
+          funcName: "decode-qr-image",
+          paramCount: 4,
+          async: false,
+          postReturn: true
+        });
+        let ret;
+        try {
+          ret = _withGlobalCurrentTaskMeta({
+            taskID: task.id(),
+            componentIdx: task.componentIdx(),
+            fn: () => protocolDecodeQrImage(ptr0, len0, toUint32(arg1), toUint32(arg2))
+          });
+        } catch (err) {
+          _debugLog("[Instruction::CallWasm] error during sync call", {
+            taskID: task.id(),
+            err
+          });
+          getOrCreateAsyncState(0).markTrapped(err);
+          task.setErrored(err);
+          task.reject(err);
+          task.exit();
+          throw err;
+        }
+        let variant3;
+        switch (dataView(memory0).getUint8(ret + 0, true)) {
+          case 0: {
+            var ptr1 = dataView(memory0).getUint32(ret + 4, true);
+            var len1 = dataView(memory0).getUint32(ret + 8, true);
+            if (ptr1 % 1 !== 0) throw new TypeError(`list pointer [${ptr1}] is not aligned to 1`);
+            var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
+            variant3 = {
+              tag: "ok",
+              val: result1
+            };
+            break;
+          }
+          case 1: {
+            var ptr2 = dataView(memory0).getUint32(ret + 4, true);
+            var len2 = dataView(memory0).getUint32(ret + 8, true);
+            var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+            variant3 = {
+              tag: "err",
+              val: result2
+            };
+            break;
+          }
+          default: {
+            throw new TypeError("invalid variant discriminant for expected");
+          }
+        }
+        _debugLog('[iface="snows:qr-data-transport/protocol", function="decode-qr-image"][Instruction::Return]', {
+          funcName: "decode-qr-image",
+          paramCount: 1,
+          async: false,
+          postReturn: true
+        });
+        const retCopy = variant3;
+        task.resolve([retCopy.val]);
+        let cstate = getOrCreateAsyncState(0);
+        cstate.mayLeave = false;
+        postReturn4(ret);
+        cstate.mayLeave = true;
+        task.exit();
+        if (typeof retCopy === "object" && retCopy.tag === "err") {
+          throw new ComponentError(retCopy.val);
+        }
+        return retCopy.val;
+      } catch (err) {
+        if (!task.isResolvedState()) {
+          task.setErrored(err);
+          task.reject(err);
+        }
+        if (!task.isExited()) {
+          task.exit({ skipExclusiveLockCheck: true });
+        }
+        throw err;
+      }
+    }
+  });
+}
+var trampoline0 = _trampoline0.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 0,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline0.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatU64],
+    hasResultPointer: false,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: null,
+    stringEncoding: "utf8",
+    getMemoryFn: () => null,
+    getReallocFn: void 0,
+    importFn: _trampoline0
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 0,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline0.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatU64],
+    hasResultPointer: false,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: null,
+    stringEncoding: "utf8",
+    getMemoryFn: () => null,
+    getReallocFn: void 0,
+    importFn: _trampoline0
+  }
+);
+function trampoline1(handle) {
+  const handleEntry = rscTableRemove(handleTable3, handle);
+  if (handleEntry.own) {
+    const rsc = captureTable3.get(handleEntry.rep);
+    if (rsc) {
+      if (rsc[symbolDispose3]) rsc[symbolDispose3]();
+      captureTable3.delete(handleEntry.rep);
+    } else if (Descriptor3[symbolCabiDispose]) {
+      Descriptor3[symbolCabiDispose](handleEntry.rep);
+    }
+  }
+}
+function trampoline2(handle) {
+  const handleEntry = rscTableRemove(handleTable1, handle);
+  if (handleEntry.own) {
+    const rsc = captureTable1.get(handleEntry.rep);
+    if (rsc) {
+      if (rsc[symbolDispose3]) rsc[symbolDispose3]();
+      captureTable1.delete(handleEntry.rep);
+    } else if (OutputStream2[symbolCabiDispose]) {
+      OutputStream2[symbolCabiDispose](handleEntry.rep);
+    }
+  }
+}
+function trampoline3(handle) {
+  const handleEntry = rscTableRemove(handleTable0, handle);
+  if (handleEntry.own) {
+    const rsc = captureTable0.get(handleEntry.rep);
+    if (rsc) {
+      if (rsc[symbolDispose3]) rsc[symbolDispose3]();
+      captureTable0.delete(handleEntry.rep);
+    } else if (Error$1[symbolCabiDispose]) {
+      Error$1[symbolCabiDispose](handleEntry.rep);
+    }
+  }
+}
+function trampoline4(handle) {
+  const handleEntry = rscTableRemove(handleTable2, handle);
+  if (handleEntry.own) {
+    const rsc = captureTable2.get(handleEntry.rep);
+    if (rsc) {
+      if (rsc[symbolDispose3]) rsc[symbolDispose3]();
+      captureTable2.delete(handleEntry.rep);
+    } else if (InputStream2[symbolCabiDispose]) {
+      InputStream2[symbolCabiDispose](handleEntry.rep);
+    }
+  }
+}
+var trampoline5 = _trampoline5.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 5,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline5.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatOwn({
+      componentIdx: 0,
+      tableIdx: 1,
+      lowerFn: function lowerImportedOwnedHost_OutputStream(obj) {
+        if (!(obj instanceof OutputStream2)) {
+          throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+        }
+        let handle = obj[symbolRscHandle];
+        if (!handle) {
+          const rep2 = obj[symbolRscRep] || ++captureCnt1;
+          captureTable1.set(rep2, obj);
+          handle = rscTableCreateOwn(handleTable1, rep2);
+        }
+        return handle;
+      }
+    })],
+    hasResultPointer: false,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: null,
+    stringEncoding: "utf8",
+    getMemoryFn: () => null,
+    getReallocFn: void 0,
+    importFn: _trampoline5
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 5,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline5.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatOwn({
+      componentIdx: 0,
+      tableIdx: 1,
+      lowerFn: function lowerImportedOwnedHost_OutputStream2(obj) {
+        if (!(obj instanceof OutputStream2)) {
+          throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+        }
+        let handle = obj[symbolRscHandle];
+        if (!handle) {
+          const rep2 = obj[symbolRscRep] || ++captureCnt1;
+          captureTable1.set(rep2, obj);
+          handle = rscTableCreateOwn(handleTable1, rep2);
+        }
+        return handle;
+      }
+    })],
+    hasResultPointer: false,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: null,
+    stringEncoding: "utf8",
+    getMemoryFn: () => null,
+    getReallocFn: void 0,
+    importFn: _trampoline5
+  }
+);
+var trampoline6 = _trampoline6.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 6,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline6.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatOwn({
+      componentIdx: 0,
+      tableIdx: 2,
+      lowerFn: function lowerImportedOwnedHost_InputStream(obj) {
+        if (!(obj instanceof InputStream2)) {
+          throw new TypeError('Resource error: Not a valid "InputStream" resource.');
+        }
+        let handle = obj[symbolRscHandle];
+        if (!handle) {
+          const rep2 = obj[symbolRscRep] || ++captureCnt2;
+          captureTable2.set(rep2, obj);
+          handle = rscTableCreateOwn(handleTable2, rep2);
+        }
+        return handle;
+      }
+    })],
+    hasResultPointer: false,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: null,
+    stringEncoding: "utf8",
+    getMemoryFn: () => null,
+    getReallocFn: void 0,
+    importFn: _trampoline6
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 6,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline6.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatOwn({
+      componentIdx: 0,
+      tableIdx: 2,
+      lowerFn: function lowerImportedOwnedHost_InputStream2(obj) {
+        if (!(obj instanceof InputStream2)) {
+          throw new TypeError('Resource error: Not a valid "InputStream" resource.');
+        }
+        let handle = obj[symbolRscHandle];
+        if (!handle) {
+          const rep2 = obj[symbolRscRep] || ++captureCnt2;
+          captureTable2.set(rep2, obj);
+          handle = rscTableCreateOwn(handleTable2, rep2);
+        }
+        return handle;
+      }
+    })],
+    hasResultPointer: false,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: null,
+    stringEncoding: "utf8",
+    getMemoryFn: () => null,
+    getReallocFn: void 0,
+    importFn: _trampoline6
+  }
+);
+var trampoline7 = _trampoline7.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 7,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline7.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatOwn({
+      componentIdx: 0,
+      tableIdx: 1,
+      lowerFn: function lowerImportedOwnedHost_OutputStream3(obj) {
+        if (!(obj instanceof OutputStream2)) {
+          throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+        }
+        let handle = obj[symbolRscHandle];
+        if (!handle) {
+          const rep2 = obj[symbolRscRep] || ++captureCnt1;
+          captureTable1.set(rep2, obj);
+          handle = rscTableCreateOwn(handleTable1, rep2);
+        }
+        return handle;
+      }
+    })],
+    hasResultPointer: false,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: null,
+    stringEncoding: "utf8",
+    getMemoryFn: () => null,
+    getReallocFn: void 0,
+    importFn: _trampoline7
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 7,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline7.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatOwn({
+      componentIdx: 0,
+      tableIdx: 1,
+      lowerFn: function lowerImportedOwnedHost_OutputStream4(obj) {
+        if (!(obj instanceof OutputStream2)) {
+          throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+        }
+        let handle = obj[symbolRscHandle];
+        if (!handle) {
+          const rep2 = obj[symbolRscRep] || ++captureCnt1;
+          captureTable1.set(rep2, obj);
+          handle = rscTableCreateOwn(handleTable1, rep2);
+        }
+        return handle;
+      }
+    })],
+    hasResultPointer: false,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: null,
+    stringEncoding: "utf8",
+    getMemoryFn: () => null,
+    getReallocFn: void 0,
+    importFn: _trampoline7
+  }
+);
+var trampoline8 = _trampoline8.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 8,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline8.manuallyAsync,
+    paramLiftFns: [
+      _liftFlatResult({
+        caseMetas: [["ok", null, 0, 0, 0, []], ["err", null, 0, 0, 0, []]],
+        variantSize32: 1,
+        variantAlign32: 1,
+        variantPayloadOffset32: 1,
+        variantFlatCount: 1,
+        variantPayloadFlatTypes: []
+      })
+    ],
+    resultLowerFns: [],
+    hasResultPointer: false,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: null,
+    stringEncoding: "utf8",
+    getMemoryFn: () => null,
+    getReallocFn: void 0,
+    importFn: _trampoline8
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 8,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline8.manuallyAsync,
+    paramLiftFns: [
+      _liftFlatResult({
+        caseMetas: [["ok", null, 0, 0, 0, []], ["err", null, 0, 0, 0, []]],
+        variantSize32: 1,
+        variantAlign32: 1,
+        variantPayloadOffset32: 1,
+        variantFlatCount: 1,
+        variantPayloadFlatTypes: []
+      })
+    ],
+    resultLowerFns: [],
+    hasResultPointer: false,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: null,
+    stringEncoding: "utf8",
+    getMemoryFn: () => null,
+    getReallocFn: void 0,
+    importFn: _trampoline8
+  }
+);
+var trampoline9 = _trampoline9.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 9,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline9.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatList({
+      elemLowerFn: _lowerFlatTuple({ elemLowerMetas: [[_lowerFlatStringAny, 8, 4], [_lowerFlatStringAny, 8, 4]], size32: 16, align32: 4 }),
+      elemSize32: 16,
+      elemAlign32: 4
+    })],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: () => realloc0,
+    importFn: _trampoline9
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 9,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline9.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatList({
+      elemLowerFn: _lowerFlatTuple({ elemLowerMetas: [[_lowerFlatStringAny, 8, 4], [_lowerFlatStringAny, 8, 4]], size32: 16, align32: 4 }),
+      elemSize32: 16,
+      elemAlign32: 4
+    })],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: () => realloc0,
+    importFn: _trampoline9
+  }
+);
+var trampoline10 = _trampoline10.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 10,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline10.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatRecord({ fieldMetas: [["seconds", _lowerFlatU64, 8, 8], ["nanoseconds", _lowerFlatU32, 4, 4]], size32: 16, align32: 8 })],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline10
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 10,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline10.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatRecord({ fieldMetas: [["seconds", _lowerFlatU64, 8, 8], ["nanoseconds", _lowerFlatU32, 4, 4]], size32: 16, align32: 8 })],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline10
+  }
+);
+var trampoline11 = _trampoline11.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 11,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline11.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 0)],
+    resultLowerFns: [
+      _lowerFlatOption({
+        caseMetas: [
+          ["none", null, 0, 0, 0],
+          [
+            "some",
+            _lowerFlatEnum({
+              caseMetas: [["access", null, 1, 1, 1], ["would-block", null, 1, 1, 1], ["already", null, 1, 1, 1], ["bad-descriptor", null, 1, 1, 1], ["busy", null, 1, 1, 1], ["deadlock", null, 1, 1, 1], ["quota", null, 1, 1, 1], ["exist", null, 1, 1, 1], ["file-too-large", null, 1, 1, 1], ["illegal-byte-sequence", null, 1, 1, 1], ["in-progress", null, 1, 1, 1], ["interrupted", null, 1, 1, 1], ["invalid", null, 1, 1, 1], ["io", null, 1, 1, 1], ["is-directory", null, 1, 1, 1], ["loop", null, 1, 1, 1], ["too-many-links", null, 1, 1, 1], ["message-size", null, 1, 1, 1], ["name-too-long", null, 1, 1, 1], ["no-device", null, 1, 1, 1], ["no-entry", null, 1, 1, 1], ["no-lock", null, 1, 1, 1], ["insufficient-memory", null, 1, 1, 1], ["insufficient-space", null, 1, 1, 1], ["not-directory", null, 1, 1, 1], ["not-empty", null, 1, 1, 1], ["not-recoverable", null, 1, 1, 1], ["unsupported", null, 1, 1, 1], ["no-tty", null, 1, 1, 1], ["no-such-device", null, 1, 1, 1], ["overflow", null, 1, 1, 1], ["not-permitted", null, 1, 1, 1], ["pipe", null, 1, 1, 1], ["read-only", null, 1, 1, 1], ["invalid-seek", null, 1, 1, 1], ["text-file-busy", null, 1, 1, 1], ["cross-device", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            1,
+            1,
+            1
+          ]
+        ],
+        variantSize32: 2,
+        variantAlign32: 1,
+        variantPayloadOffset32: 1,
+        variantFlatCount: 2,
+        payloadMaybeNull: false
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline11
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 11,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline11.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 0)],
+    resultLowerFns: [
+      _lowerFlatOption({
+        caseMetas: [
+          ["none", null, 0, 0, 0],
+          [
+            "some",
+            _lowerFlatEnum({
+              caseMetas: [["access", null, 1, 1, 1], ["would-block", null, 1, 1, 1], ["already", null, 1, 1, 1], ["bad-descriptor", null, 1, 1, 1], ["busy", null, 1, 1, 1], ["deadlock", null, 1, 1, 1], ["quota", null, 1, 1, 1], ["exist", null, 1, 1, 1], ["file-too-large", null, 1, 1, 1], ["illegal-byte-sequence", null, 1, 1, 1], ["in-progress", null, 1, 1, 1], ["interrupted", null, 1, 1, 1], ["invalid", null, 1, 1, 1], ["io", null, 1, 1, 1], ["is-directory", null, 1, 1, 1], ["loop", null, 1, 1, 1], ["too-many-links", null, 1, 1, 1], ["message-size", null, 1, 1, 1], ["name-too-long", null, 1, 1, 1], ["no-device", null, 1, 1, 1], ["no-entry", null, 1, 1, 1], ["no-lock", null, 1, 1, 1], ["insufficient-memory", null, 1, 1, 1], ["insufficient-space", null, 1, 1, 1], ["not-directory", null, 1, 1, 1], ["not-empty", null, 1, 1, 1], ["not-recoverable", null, 1, 1, 1], ["unsupported", null, 1, 1, 1], ["no-tty", null, 1, 1, 1], ["no-such-device", null, 1, 1, 1], ["overflow", null, 1, 1, 1], ["not-permitted", null, 1, 1, 1], ["pipe", null, 1, 1, 1], ["read-only", null, 1, 1, 1], ["invalid-seek", null, 1, 1, 1], ["text-file-busy", null, 1, 1, 1], ["cross-device", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            1,
+            1,
+            1
+          ]
+        ],
+        variantSize32: 2,
+        variantAlign32: 1,
+        variantPayloadOffset32: 1,
+        variantFlatCount: 2,
+        payloadMaybeNull: false
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline11
+  }
+);
+var trampoline12 = _trampoline12.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 12,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline12.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 3), _liftFlatU64],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", _lowerFlatOwn({
+            componentIdx: 0,
+            tableIdx: 1,
+            lowerFn: function lowerImportedOwnedHost_OutputStream5(obj) {
+              if (!(obj instanceof OutputStream2)) {
+                throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+              }
+              let handle = obj[symbolRscHandle];
+              if (!handle) {
+                const rep2 = obj[symbolRscRep] || ++captureCnt1;
+                captureTable1.set(rep2, obj);
+                handle = rscTableCreateOwn(handleTable1, rep2);
+              }
+              return handle;
+            }
+          }), 8, 4, 4],
+          [
+            "err",
+            _lowerFlatEnum({
+              caseMetas: [["access", null, 1, 1, 1], ["would-block", null, 1, 1, 1], ["already", null, 1, 1, 1], ["bad-descriptor", null, 1, 1, 1], ["busy", null, 1, 1, 1], ["deadlock", null, 1, 1, 1], ["quota", null, 1, 1, 1], ["exist", null, 1, 1, 1], ["file-too-large", null, 1, 1, 1], ["illegal-byte-sequence", null, 1, 1, 1], ["in-progress", null, 1, 1, 1], ["interrupted", null, 1, 1, 1], ["invalid", null, 1, 1, 1], ["io", null, 1, 1, 1], ["is-directory", null, 1, 1, 1], ["loop", null, 1, 1, 1], ["too-many-links", null, 1, 1, 1], ["message-size", null, 1, 1, 1], ["name-too-long", null, 1, 1, 1], ["no-device", null, 1, 1, 1], ["no-entry", null, 1, 1, 1], ["no-lock", null, 1, 1, 1], ["insufficient-memory", null, 1, 1, 1], ["insufficient-space", null, 1, 1, 1], ["not-directory", null, 1, 1, 1], ["not-empty", null, 1, 1, 1], ["not-recoverable", null, 1, 1, 1], ["unsupported", null, 1, 1, 1], ["no-tty", null, 1, 1, 1], ["no-such-device", null, 1, 1, 1], ["overflow", null, 1, 1, 1], ["not-permitted", null, 1, 1, 1], ["pipe", null, 1, 1, 1], ["read-only", null, 1, 1, 1], ["invalid-seek", null, 1, 1, 1], ["text-file-busy", null, 1, 1, 1], ["cross-device", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            8,
+            4,
+            4
+          ]
+        ],
+        variantSize32: 8,
+        variantAlign32: 4,
+        variantPayloadOffset32: 4,
+        variantFlatCount: 2
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline12
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 12,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline12.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 3), _liftFlatU64],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", _lowerFlatOwn({
+            componentIdx: 0,
+            tableIdx: 1,
+            lowerFn: function lowerImportedOwnedHost_OutputStream6(obj) {
+              if (!(obj instanceof OutputStream2)) {
+                throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+              }
+              let handle = obj[symbolRscHandle];
+              if (!handle) {
+                const rep2 = obj[symbolRscRep] || ++captureCnt1;
+                captureTable1.set(rep2, obj);
+                handle = rscTableCreateOwn(handleTable1, rep2);
+              }
+              return handle;
+            }
+          }), 8, 4, 4],
+          [
+            "err",
+            _lowerFlatEnum({
+              caseMetas: [["access", null, 1, 1, 1], ["would-block", null, 1, 1, 1], ["already", null, 1, 1, 1], ["bad-descriptor", null, 1, 1, 1], ["busy", null, 1, 1, 1], ["deadlock", null, 1, 1, 1], ["quota", null, 1, 1, 1], ["exist", null, 1, 1, 1], ["file-too-large", null, 1, 1, 1], ["illegal-byte-sequence", null, 1, 1, 1], ["in-progress", null, 1, 1, 1], ["interrupted", null, 1, 1, 1], ["invalid", null, 1, 1, 1], ["io", null, 1, 1, 1], ["is-directory", null, 1, 1, 1], ["loop", null, 1, 1, 1], ["too-many-links", null, 1, 1, 1], ["message-size", null, 1, 1, 1], ["name-too-long", null, 1, 1, 1], ["no-device", null, 1, 1, 1], ["no-entry", null, 1, 1, 1], ["no-lock", null, 1, 1, 1], ["insufficient-memory", null, 1, 1, 1], ["insufficient-space", null, 1, 1, 1], ["not-directory", null, 1, 1, 1], ["not-empty", null, 1, 1, 1], ["not-recoverable", null, 1, 1, 1], ["unsupported", null, 1, 1, 1], ["no-tty", null, 1, 1, 1], ["no-such-device", null, 1, 1, 1], ["overflow", null, 1, 1, 1], ["not-permitted", null, 1, 1, 1], ["pipe", null, 1, 1, 1], ["read-only", null, 1, 1, 1], ["invalid-seek", null, 1, 1, 1], ["text-file-busy", null, 1, 1, 1], ["cross-device", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            8,
+            4,
+            4
+          ]
+        ],
+        variantSize32: 8,
+        variantAlign32: 4,
+        variantPayloadOffset32: 4,
+        variantFlatCount: 2
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline12
+  }
+);
+var trampoline13 = _trampoline13.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 13,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline13.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 3)],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", _lowerFlatOwn({
+            componentIdx: 0,
+            tableIdx: 1,
+            lowerFn: function lowerImportedOwnedHost_OutputStream7(obj) {
+              if (!(obj instanceof OutputStream2)) {
+                throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+              }
+              let handle = obj[symbolRscHandle];
+              if (!handle) {
+                const rep2 = obj[symbolRscRep] || ++captureCnt1;
+                captureTable1.set(rep2, obj);
+                handle = rscTableCreateOwn(handleTable1, rep2);
+              }
+              return handle;
+            }
+          }), 8, 4, 4],
+          [
+            "err",
+            _lowerFlatEnum({
+              caseMetas: [["access", null, 1, 1, 1], ["would-block", null, 1, 1, 1], ["already", null, 1, 1, 1], ["bad-descriptor", null, 1, 1, 1], ["busy", null, 1, 1, 1], ["deadlock", null, 1, 1, 1], ["quota", null, 1, 1, 1], ["exist", null, 1, 1, 1], ["file-too-large", null, 1, 1, 1], ["illegal-byte-sequence", null, 1, 1, 1], ["in-progress", null, 1, 1, 1], ["interrupted", null, 1, 1, 1], ["invalid", null, 1, 1, 1], ["io", null, 1, 1, 1], ["is-directory", null, 1, 1, 1], ["loop", null, 1, 1, 1], ["too-many-links", null, 1, 1, 1], ["message-size", null, 1, 1, 1], ["name-too-long", null, 1, 1, 1], ["no-device", null, 1, 1, 1], ["no-entry", null, 1, 1, 1], ["no-lock", null, 1, 1, 1], ["insufficient-memory", null, 1, 1, 1], ["insufficient-space", null, 1, 1, 1], ["not-directory", null, 1, 1, 1], ["not-empty", null, 1, 1, 1], ["not-recoverable", null, 1, 1, 1], ["unsupported", null, 1, 1, 1], ["no-tty", null, 1, 1, 1], ["no-such-device", null, 1, 1, 1], ["overflow", null, 1, 1, 1], ["not-permitted", null, 1, 1, 1], ["pipe", null, 1, 1, 1], ["read-only", null, 1, 1, 1], ["invalid-seek", null, 1, 1, 1], ["text-file-busy", null, 1, 1, 1], ["cross-device", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            8,
+            4,
+            4
+          ]
+        ],
+        variantSize32: 8,
+        variantAlign32: 4,
+        variantPayloadOffset32: 4,
+        variantFlatCount: 2
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline13
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 13,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline13.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 3)],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", _lowerFlatOwn({
+            componentIdx: 0,
+            tableIdx: 1,
+            lowerFn: function lowerImportedOwnedHost_OutputStream8(obj) {
+              if (!(obj instanceof OutputStream2)) {
+                throw new TypeError('Resource error: Not a valid "OutputStream" resource.');
+              }
+              let handle = obj[symbolRscHandle];
+              if (!handle) {
+                const rep2 = obj[symbolRscRep] || ++captureCnt1;
+                captureTable1.set(rep2, obj);
+                handle = rscTableCreateOwn(handleTable1, rep2);
+              }
+              return handle;
+            }
+          }), 8, 4, 4],
+          [
+            "err",
+            _lowerFlatEnum({
+              caseMetas: [["access", null, 1, 1, 1], ["would-block", null, 1, 1, 1], ["already", null, 1, 1, 1], ["bad-descriptor", null, 1, 1, 1], ["busy", null, 1, 1, 1], ["deadlock", null, 1, 1, 1], ["quota", null, 1, 1, 1], ["exist", null, 1, 1, 1], ["file-too-large", null, 1, 1, 1], ["illegal-byte-sequence", null, 1, 1, 1], ["in-progress", null, 1, 1, 1], ["interrupted", null, 1, 1, 1], ["invalid", null, 1, 1, 1], ["io", null, 1, 1, 1], ["is-directory", null, 1, 1, 1], ["loop", null, 1, 1, 1], ["too-many-links", null, 1, 1, 1], ["message-size", null, 1, 1, 1], ["name-too-long", null, 1, 1, 1], ["no-device", null, 1, 1, 1], ["no-entry", null, 1, 1, 1], ["no-lock", null, 1, 1, 1], ["insufficient-memory", null, 1, 1, 1], ["insufficient-space", null, 1, 1, 1], ["not-directory", null, 1, 1, 1], ["not-empty", null, 1, 1, 1], ["not-recoverable", null, 1, 1, 1], ["unsupported", null, 1, 1, 1], ["no-tty", null, 1, 1, 1], ["no-such-device", null, 1, 1, 1], ["overflow", null, 1, 1, 1], ["not-permitted", null, 1, 1, 1], ["pipe", null, 1, 1, 1], ["read-only", null, 1, 1, 1], ["invalid-seek", null, 1, 1, 1], ["text-file-busy", null, 1, 1, 1], ["cross-device", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            8,
+            4,
+            4
+          ]
+        ],
+        variantSize32: 8,
+        variantAlign32: 4,
+        variantPayloadOffset32: 4,
+        variantFlatCount: 2
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline13
+  }
+);
+var trampoline14 = _trampoline14.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 14,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline14.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 3)],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          [
+            "ok",
+            _lowerFlatEnum({
+              caseMetas: [["unknown", null, 1, 1, 1], ["block-device", null, 1, 1, 1], ["character-device", null, 1, 1, 1], ["directory", null, 1, 1, 1], ["fifo", null, 1, 1, 1], ["symbolic-link", null, 1, 1, 1], ["regular-file", null, 1, 1, 1], ["socket", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            2,
+            1,
+            1
+          ],
+          [
+            "err",
+            _lowerFlatEnum({
+              caseMetas: [["access", null, 1, 1, 1], ["would-block", null, 1, 1, 1], ["already", null, 1, 1, 1], ["bad-descriptor", null, 1, 1, 1], ["busy", null, 1, 1, 1], ["deadlock", null, 1, 1, 1], ["quota", null, 1, 1, 1], ["exist", null, 1, 1, 1], ["file-too-large", null, 1, 1, 1], ["illegal-byte-sequence", null, 1, 1, 1], ["in-progress", null, 1, 1, 1], ["interrupted", null, 1, 1, 1], ["invalid", null, 1, 1, 1], ["io", null, 1, 1, 1], ["is-directory", null, 1, 1, 1], ["loop", null, 1, 1, 1], ["too-many-links", null, 1, 1, 1], ["message-size", null, 1, 1, 1], ["name-too-long", null, 1, 1, 1], ["no-device", null, 1, 1, 1], ["no-entry", null, 1, 1, 1], ["no-lock", null, 1, 1, 1], ["insufficient-memory", null, 1, 1, 1], ["insufficient-space", null, 1, 1, 1], ["not-directory", null, 1, 1, 1], ["not-empty", null, 1, 1, 1], ["not-recoverable", null, 1, 1, 1], ["unsupported", null, 1, 1, 1], ["no-tty", null, 1, 1, 1], ["no-such-device", null, 1, 1, 1], ["overflow", null, 1, 1, 1], ["not-permitted", null, 1, 1, 1], ["pipe", null, 1, 1, 1], ["read-only", null, 1, 1, 1], ["invalid-seek", null, 1, 1, 1], ["text-file-busy", null, 1, 1, 1], ["cross-device", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            2,
+            1,
+            1
+          ]
+        ],
+        variantSize32: 2,
+        variantAlign32: 1,
+        variantPayloadOffset32: 1,
+        variantFlatCount: 2
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline14
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 14,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline14.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 3)],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          [
+            "ok",
+            _lowerFlatEnum({
+              caseMetas: [["unknown", null, 1, 1, 1], ["block-device", null, 1, 1, 1], ["character-device", null, 1, 1, 1], ["directory", null, 1, 1, 1], ["fifo", null, 1, 1, 1], ["symbolic-link", null, 1, 1, 1], ["regular-file", null, 1, 1, 1], ["socket", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            2,
+            1,
+            1
+          ],
+          [
+            "err",
+            _lowerFlatEnum({
+              caseMetas: [["access", null, 1, 1, 1], ["would-block", null, 1, 1, 1], ["already", null, 1, 1, 1], ["bad-descriptor", null, 1, 1, 1], ["busy", null, 1, 1, 1], ["deadlock", null, 1, 1, 1], ["quota", null, 1, 1, 1], ["exist", null, 1, 1, 1], ["file-too-large", null, 1, 1, 1], ["illegal-byte-sequence", null, 1, 1, 1], ["in-progress", null, 1, 1, 1], ["interrupted", null, 1, 1, 1], ["invalid", null, 1, 1, 1], ["io", null, 1, 1, 1], ["is-directory", null, 1, 1, 1], ["loop", null, 1, 1, 1], ["too-many-links", null, 1, 1, 1], ["message-size", null, 1, 1, 1], ["name-too-long", null, 1, 1, 1], ["no-device", null, 1, 1, 1], ["no-entry", null, 1, 1, 1], ["no-lock", null, 1, 1, 1], ["insufficient-memory", null, 1, 1, 1], ["insufficient-space", null, 1, 1, 1], ["not-directory", null, 1, 1, 1], ["not-empty", null, 1, 1, 1], ["not-recoverable", null, 1, 1, 1], ["unsupported", null, 1, 1, 1], ["no-tty", null, 1, 1, 1], ["no-such-device", null, 1, 1, 1], ["overflow", null, 1, 1, 1], ["not-permitted", null, 1, 1, 1], ["pipe", null, 1, 1, 1], ["read-only", null, 1, 1, 1], ["invalid-seek", null, 1, 1, 1], ["text-file-busy", null, 1, 1, 1], ["cross-device", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            2,
+            1,
+            1
+          ]
+        ],
+        variantSize32: 2,
+        variantAlign32: 1,
+        variantPayloadOffset32: 1,
+        variantFlatCount: 2
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline14
+  }
+);
+var trampoline15 = _trampoline15.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 15,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline15.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 3)],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", _lowerFlatRecord({ fieldMetas: [[
+            "type",
+            _lowerFlatEnum({
+              caseMetas: [["unknown", null, 1, 1, 1], ["block-device", null, 1, 1, 1], ["character-device", null, 1, 1, 1], ["directory", null, 1, 1, 1], ["fifo", null, 1, 1, 1], ["symbolic-link", null, 1, 1, 1], ["regular-file", null, 1, 1, 1], ["socket", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            1,
+            1
+          ], ["linkCount", _lowerFlatU64, 8, 8], ["size", _lowerFlatU64, 8, 8], [
+            "dataAccessTimestamp",
+            _lowerFlatOption({
+              caseMetas: [
+                ["none", null, 0, 0, 0],
+                ["some", _lowerFlatRecord({ fieldMetas: [["seconds", _lowerFlatU64, 8, 8], ["nanoseconds", _lowerFlatU32, 4, 4]], size32: 16, align32: 8 }), 16, 8, 2]
+              ],
+              variantSize32: 24,
+              variantAlign32: 8,
+              variantPayloadOffset32: 8,
+              variantFlatCount: 3,
+              payloadMaybeNull: false
+            }),
+            24,
+            8
+          ], [
+            "dataModificationTimestamp",
+            _lowerFlatOption({
+              caseMetas: [
+                ["none", null, 0, 0, 0],
+                ["some", _lowerFlatRecord({ fieldMetas: [["seconds", _lowerFlatU64, 8, 8], ["nanoseconds", _lowerFlatU32, 4, 4]], size32: 16, align32: 8 }), 16, 8, 2]
+              ],
+              variantSize32: 24,
+              variantAlign32: 8,
+              variantPayloadOffset32: 8,
+              variantFlatCount: 3,
+              payloadMaybeNull: false
+            }),
+            24,
+            8
+          ], [
+            "statusChangeTimestamp",
+            _lowerFlatOption({
+              caseMetas: [
+                ["none", null, 0, 0, 0],
+                ["some", _lowerFlatRecord({ fieldMetas: [["seconds", _lowerFlatU64, 8, 8], ["nanoseconds", _lowerFlatU32, 4, 4]], size32: 16, align32: 8 }), 16, 8, 2]
+              ],
+              variantSize32: 24,
+              variantAlign32: 8,
+              variantPayloadOffset32: 8,
+              variantFlatCount: 3,
+              payloadMaybeNull: false
+            }),
+            24,
+            8
+          ]], size32: 96, align32: 8 }), 104, 8, 8],
+          [
+            "err",
+            _lowerFlatEnum({
+              caseMetas: [["access", null, 1, 1, 1], ["would-block", null, 1, 1, 1], ["already", null, 1, 1, 1], ["bad-descriptor", null, 1, 1, 1], ["busy", null, 1, 1, 1], ["deadlock", null, 1, 1, 1], ["quota", null, 1, 1, 1], ["exist", null, 1, 1, 1], ["file-too-large", null, 1, 1, 1], ["illegal-byte-sequence", null, 1, 1, 1], ["in-progress", null, 1, 1, 1], ["interrupted", null, 1, 1, 1], ["invalid", null, 1, 1, 1], ["io", null, 1, 1, 1], ["is-directory", null, 1, 1, 1], ["loop", null, 1, 1, 1], ["too-many-links", null, 1, 1, 1], ["message-size", null, 1, 1, 1], ["name-too-long", null, 1, 1, 1], ["no-device", null, 1, 1, 1], ["no-entry", null, 1, 1, 1], ["no-lock", null, 1, 1, 1], ["insufficient-memory", null, 1, 1, 1], ["insufficient-space", null, 1, 1, 1], ["not-directory", null, 1, 1, 1], ["not-empty", null, 1, 1, 1], ["not-recoverable", null, 1, 1, 1], ["unsupported", null, 1, 1, 1], ["no-tty", null, 1, 1, 1], ["no-such-device", null, 1, 1, 1], ["overflow", null, 1, 1, 1], ["not-permitted", null, 1, 1, 1], ["pipe", null, 1, 1, 1], ["read-only", null, 1, 1, 1], ["invalid-seek", null, 1, 1, 1], ["text-file-busy", null, 1, 1, 1], ["cross-device", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            104,
+            8,
+            8
+          ]
+        ],
+        variantSize32: 104,
+        variantAlign32: 8,
+        variantPayloadOffset32: 8,
+        variantFlatCount: 13
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline15
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 15,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline15.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 3)],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", _lowerFlatRecord({ fieldMetas: [[
+            "type",
+            _lowerFlatEnum({
+              caseMetas: [["unknown", null, 1, 1, 1], ["block-device", null, 1, 1, 1], ["character-device", null, 1, 1, 1], ["directory", null, 1, 1, 1], ["fifo", null, 1, 1, 1], ["symbolic-link", null, 1, 1, 1], ["regular-file", null, 1, 1, 1], ["socket", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            1,
+            1
+          ], ["linkCount", _lowerFlatU64, 8, 8], ["size", _lowerFlatU64, 8, 8], [
+            "dataAccessTimestamp",
+            _lowerFlatOption({
+              caseMetas: [
+                ["none", null, 0, 0, 0],
+                ["some", _lowerFlatRecord({ fieldMetas: [["seconds", _lowerFlatU64, 8, 8], ["nanoseconds", _lowerFlatU32, 4, 4]], size32: 16, align32: 8 }), 16, 8, 2]
+              ],
+              variantSize32: 24,
+              variantAlign32: 8,
+              variantPayloadOffset32: 8,
+              variantFlatCount: 3,
+              payloadMaybeNull: false
+            }),
+            24,
+            8
+          ], [
+            "dataModificationTimestamp",
+            _lowerFlatOption({
+              caseMetas: [
+                ["none", null, 0, 0, 0],
+                ["some", _lowerFlatRecord({ fieldMetas: [["seconds", _lowerFlatU64, 8, 8], ["nanoseconds", _lowerFlatU32, 4, 4]], size32: 16, align32: 8 }), 16, 8, 2]
+              ],
+              variantSize32: 24,
+              variantAlign32: 8,
+              variantPayloadOffset32: 8,
+              variantFlatCount: 3,
+              payloadMaybeNull: false
+            }),
+            24,
+            8
+          ], [
+            "statusChangeTimestamp",
+            _lowerFlatOption({
+              caseMetas: [
+                ["none", null, 0, 0, 0],
+                ["some", _lowerFlatRecord({ fieldMetas: [["seconds", _lowerFlatU64, 8, 8], ["nanoseconds", _lowerFlatU32, 4, 4]], size32: 16, align32: 8 }), 16, 8, 2]
+              ],
+              variantSize32: 24,
+              variantAlign32: 8,
+              variantPayloadOffset32: 8,
+              variantFlatCount: 3,
+              payloadMaybeNull: false
+            }),
+            24,
+            8
+          ]], size32: 96, align32: 8 }), 104, 8, 8],
+          [
+            "err",
+            _lowerFlatEnum({
+              caseMetas: [["access", null, 1, 1, 1], ["would-block", null, 1, 1, 1], ["already", null, 1, 1, 1], ["bad-descriptor", null, 1, 1, 1], ["busy", null, 1, 1, 1], ["deadlock", null, 1, 1, 1], ["quota", null, 1, 1, 1], ["exist", null, 1, 1, 1], ["file-too-large", null, 1, 1, 1], ["illegal-byte-sequence", null, 1, 1, 1], ["in-progress", null, 1, 1, 1], ["interrupted", null, 1, 1, 1], ["invalid", null, 1, 1, 1], ["io", null, 1, 1, 1], ["is-directory", null, 1, 1, 1], ["loop", null, 1, 1, 1], ["too-many-links", null, 1, 1, 1], ["message-size", null, 1, 1, 1], ["name-too-long", null, 1, 1, 1], ["no-device", null, 1, 1, 1], ["no-entry", null, 1, 1, 1], ["no-lock", null, 1, 1, 1], ["insufficient-memory", null, 1, 1, 1], ["insufficient-space", null, 1, 1, 1], ["not-directory", null, 1, 1, 1], ["not-empty", null, 1, 1, 1], ["not-recoverable", null, 1, 1, 1], ["unsupported", null, 1, 1, 1], ["no-tty", null, 1, 1, 1], ["no-such-device", null, 1, 1, 1], ["overflow", null, 1, 1, 1], ["not-permitted", null, 1, 1, 1], ["pipe", null, 1, 1, 1], ["read-only", null, 1, 1, 1], ["invalid-seek", null, 1, 1, 1], ["text-file-busy", null, 1, 1, 1], ["cross-device", null, 1, 1, 1]],
+              variantSize32: 1,
+              variantAlign32: 1,
+              variantPayloadOffset32: 1,
+              variantFlatCount: 1
+            }),
+            104,
+            8,
+            8
+          ]
+        ],
+        variantSize32: 104,
+        variantAlign32: 8,
+        variantPayloadOffset32: 8,
+        variantFlatCount: 13
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline15
+  }
+);
+var trampoline16 = _trampoline16.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 16,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline16.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 1)],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", _lowerFlatU64, 16, 8, 8],
+          ["err", _lowerFlatVariant({
+            caseMetas: [["last-operation-failed", _lowerFlatOwn({
+              componentIdx: 0,
+              tableIdx: 0,
+              lowerFn: function lowerImportedOwnedHost_Error$1(obj) {
+                if (!(obj instanceof Error$1)) {
+                  throw new TypeError('Resource error: Not a valid "Error$1" resource.');
+                }
+                let handle = obj[symbolRscHandle];
+                if (!handle) {
+                  const rep2 = obj[symbolRscRep] || ++captureCnt0;
+                  captureTable0.set(rep2, obj);
+                  handle = rscTableCreateOwn(handleTable0, rep2);
+                }
+                return handle;
+              }
+            }), 4, 4, 1], ["closed", null, 0, 0, 0]],
+            variantSize32: 8,
+            variantAlign32: 4,
+            variantPayloadOffset32: 4,
+            variantFlatCount: 2
+          }), 16, 8, 8]
+        ],
+        variantSize32: 16,
+        variantAlign32: 8,
+        variantPayloadOffset32: 8,
+        variantFlatCount: 3
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline16
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 16,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline16.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 1)],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", _lowerFlatU64, 16, 8, 8],
+          ["err", _lowerFlatVariant({
+            caseMetas: [["last-operation-failed", _lowerFlatOwn({
+              componentIdx: 0,
+              tableIdx: 0,
+              lowerFn: function lowerImportedOwnedHost_Error$12(obj) {
+                if (!(obj instanceof Error$1)) {
+                  throw new TypeError('Resource error: Not a valid "Error$1" resource.');
+                }
+                let handle = obj[symbolRscHandle];
+                if (!handle) {
+                  const rep2 = obj[symbolRscRep] || ++captureCnt0;
+                  captureTable0.set(rep2, obj);
+                  handle = rscTableCreateOwn(handleTable0, rep2);
+                }
+                return handle;
+              }
+            }), 4, 4, 1], ["closed", null, 0, 0, 0]],
+            variantSize32: 8,
+            variantAlign32: 4,
+            variantPayloadOffset32: 4,
+            variantFlatCount: 2
+          }), 16, 8, 8]
+        ],
+        variantSize32: 16,
+        variantAlign32: 8,
+        variantPayloadOffset32: 8,
+        variantFlatCount: 3
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline16
+  }
+);
+var trampoline17 = _trampoline17.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 17,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline17.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 1), _liftFlatList({
+      elemLiftFn: _liftFlatU8,
+      elemAlign32: 1,
+      elemSize32: 1,
+      typedArray: Uint8Array
+    })],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", null, 12, 4, 4],
+          ["err", _lowerFlatVariant({
+            caseMetas: [["last-operation-failed", _lowerFlatOwn({
+              componentIdx: 0,
+              tableIdx: 0,
+              lowerFn: function lowerImportedOwnedHost_Error$13(obj) {
+                if (!(obj instanceof Error$1)) {
+                  throw new TypeError('Resource error: Not a valid "Error$1" resource.');
+                }
+                let handle = obj[symbolRscHandle];
+                if (!handle) {
+                  const rep2 = obj[symbolRscRep] || ++captureCnt0;
+                  captureTable0.set(rep2, obj);
+                  handle = rscTableCreateOwn(handleTable0, rep2);
+                }
+                return handle;
+              }
+            }), 4, 4, 1], ["closed", null, 0, 0, 0]],
+            variantSize32: 8,
+            variantAlign32: 4,
+            variantPayloadOffset32: 4,
+            variantFlatCount: 2
+          }), 12, 4, 4]
+        ],
+        variantSize32: 12,
+        variantAlign32: 4,
+        variantPayloadOffset32: 4,
+        variantFlatCount: 3
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline17
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 17,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline17.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 1), _liftFlatList({
+      elemLiftFn: _liftFlatU8,
+      elemAlign32: 1,
+      elemSize32: 1,
+      typedArray: Uint8Array
+    })],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", null, 12, 4, 4],
+          ["err", _lowerFlatVariant({
+            caseMetas: [["last-operation-failed", _lowerFlatOwn({
+              componentIdx: 0,
+              tableIdx: 0,
+              lowerFn: function lowerImportedOwnedHost_Error$14(obj) {
+                if (!(obj instanceof Error$1)) {
+                  throw new TypeError('Resource error: Not a valid "Error$1" resource.');
+                }
+                let handle = obj[symbolRscHandle];
+                if (!handle) {
+                  const rep2 = obj[symbolRscRep] || ++captureCnt0;
+                  captureTable0.set(rep2, obj);
+                  handle = rscTableCreateOwn(handleTable0, rep2);
+                }
+                return handle;
+              }
+            }), 4, 4, 1], ["closed", null, 0, 0, 0]],
+            variantSize32: 8,
+            variantAlign32: 4,
+            variantPayloadOffset32: 4,
+            variantFlatCount: 2
+          }), 12, 4, 4]
+        ],
+        variantSize32: 12,
+        variantAlign32: 4,
+        variantPayloadOffset32: 4,
+        variantFlatCount: 3
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline17
+  }
+);
+var trampoline18 = _trampoline18.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 18,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline18.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 1)],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", null, 12, 4, 4],
+          ["err", _lowerFlatVariant({
+            caseMetas: [["last-operation-failed", _lowerFlatOwn({
+              componentIdx: 0,
+              tableIdx: 0,
+              lowerFn: function lowerImportedOwnedHost_Error$15(obj) {
+                if (!(obj instanceof Error$1)) {
+                  throw new TypeError('Resource error: Not a valid "Error$1" resource.');
+                }
+                let handle = obj[symbolRscHandle];
+                if (!handle) {
+                  const rep2 = obj[symbolRscRep] || ++captureCnt0;
+                  captureTable0.set(rep2, obj);
+                  handle = rscTableCreateOwn(handleTable0, rep2);
+                }
+                return handle;
+              }
+            }), 4, 4, 1], ["closed", null, 0, 0, 0]],
+            variantSize32: 8,
+            variantAlign32: 4,
+            variantPayloadOffset32: 4,
+            variantFlatCount: 2
+          }), 12, 4, 4]
+        ],
+        variantSize32: 12,
+        variantAlign32: 4,
+        variantPayloadOffset32: 4,
+        variantFlatCount: 3
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline18
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 18,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline18.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 1)],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", null, 12, 4, 4],
+          ["err", _lowerFlatVariant({
+            caseMetas: [["last-operation-failed", _lowerFlatOwn({
+              componentIdx: 0,
+              tableIdx: 0,
+              lowerFn: function lowerImportedOwnedHost_Error$16(obj) {
+                if (!(obj instanceof Error$1)) {
+                  throw new TypeError('Resource error: Not a valid "Error$1" resource.');
+                }
+                let handle = obj[symbolRscHandle];
+                if (!handle) {
+                  const rep2 = obj[symbolRscRep] || ++captureCnt0;
+                  captureTable0.set(rep2, obj);
+                  handle = rscTableCreateOwn(handleTable0, rep2);
+                }
+                return handle;
+              }
+            }), 4, 4, 1], ["closed", null, 0, 0, 0]],
+            variantSize32: 8,
+            variantAlign32: 4,
+            variantPayloadOffset32: 4,
+            variantFlatCount: 2
+          }), 12, 4, 4]
+        ],
+        variantSize32: 12,
+        variantAlign32: 4,
+        variantPayloadOffset32: 4,
+        variantFlatCount: 3
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline18
+  }
+);
+var trampoline19 = _trampoline19.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 19,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline19.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 1), _liftFlatList({
+      elemLiftFn: _liftFlatU8,
+      elemAlign32: 1,
+      elemSize32: 1,
+      typedArray: Uint8Array
+    })],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", null, 12, 4, 4],
+          ["err", _lowerFlatVariant({
+            caseMetas: [["last-operation-failed", _lowerFlatOwn({
+              componentIdx: 0,
+              tableIdx: 0,
+              lowerFn: function lowerImportedOwnedHost_Error$17(obj) {
+                if (!(obj instanceof Error$1)) {
+                  throw new TypeError('Resource error: Not a valid "Error$1" resource.');
+                }
+                let handle = obj[symbolRscHandle];
+                if (!handle) {
+                  const rep2 = obj[symbolRscRep] || ++captureCnt0;
+                  captureTable0.set(rep2, obj);
+                  handle = rscTableCreateOwn(handleTable0, rep2);
+                }
+                return handle;
+              }
+            }), 4, 4, 1], ["closed", null, 0, 0, 0]],
+            variantSize32: 8,
+            variantAlign32: 4,
+            variantPayloadOffset32: 4,
+            variantFlatCount: 2
+          }), 12, 4, 4]
+        ],
+        variantSize32: 12,
+        variantAlign32: 4,
+        variantPayloadOffset32: 4,
+        variantFlatCount: 3
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline19
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 19,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline19.manuallyAsync,
+    paramLiftFns: [_liftFlatBorrow.bind(null, 1), _liftFlatList({
+      elemLiftFn: _liftFlatU8,
+      elemAlign32: 1,
+      elemSize32: 1,
+      typedArray: Uint8Array
+    })],
+    resultLowerFns: [
+      _lowerFlatResult({
+        caseMetas: [
+          ["ok", null, 12, 4, 4],
+          ["err", _lowerFlatVariant({
+            caseMetas: [["last-operation-failed", _lowerFlatOwn({
+              componentIdx: 0,
+              tableIdx: 0,
+              lowerFn: function lowerImportedOwnedHost_Error$18(obj) {
+                if (!(obj instanceof Error$1)) {
+                  throw new TypeError('Resource error: Not a valid "Error$1" resource.');
+                }
+                let handle = obj[symbolRscHandle];
+                if (!handle) {
+                  const rep2 = obj[symbolRscRep] || ++captureCnt0;
+                  captureTable0.set(rep2, obj);
+                  handle = rscTableCreateOwn(handleTable0, rep2);
+                }
+                return handle;
+              }
+            }), 4, 4, 1], ["closed", null, 0, 0, 0]],
+            variantSize32: 8,
+            variantAlign32: 4,
+            variantPayloadOffset32: 4,
+            variantFlatCount: 2
+          }), 12, 4, 4]
+        ],
+        variantSize32: 12,
+        variantAlign32: 4,
+        variantPayloadOffset32: 4,
+        variantFlatCount: 3
+      })
+    ],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: void 0,
+    importFn: _trampoline19
+  }
+);
+var trampoline20 = _trampoline20.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 20,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline20.manuallyAsync,
+    paramLiftFns: [_liftFlatU64],
+    resultLowerFns: [_lowerFlatList({
+      elemLowerFn: _lowerFlatU8,
+      elemSize32: 1,
+      elemAlign32: 1
+    })],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: () => realloc0,
+    importFn: _trampoline20
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 20,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline20.manuallyAsync,
+    paramLiftFns: [_liftFlatU64],
+    resultLowerFns: [_lowerFlatList({
+      elemLowerFn: _lowerFlatU8,
+      elemSize32: 1,
+      elemAlign32: 1
+    })],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: () => realloc0,
+    importFn: _trampoline20
+  }
+);
+var trampoline21 = _trampoline21.manuallyAsync ? new WebAssembly.Suspending(_suspendingImport(0, _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 21,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline21.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatList({
+      elemLowerFn: _lowerFlatTuple({ elemLowerMetas: [[_lowerFlatOwn({
+        componentIdx: 0,
+        tableIdx: 3,
+        lowerFn: function lowerImportedOwnedHost_Descriptor(obj) {
+          if (!(obj instanceof Descriptor3)) {
+            throw new TypeError('Resource error: Not a valid "Descriptor" resource.');
+          }
+          let handle = obj[symbolRscHandle];
+          if (!handle) {
+            const rep2 = obj[symbolRscRep] || ++captureCnt3;
+            captureTable3.set(rep2, obj);
+            handle = rscTableCreateOwn(handleTable3, rep2);
+          }
+          return handle;
+        }
+      }), 4, 4], [_lowerFlatStringAny, 8, 4]], size32: 12, align32: 4 }),
+      elemSize32: 12,
+      elemAlign32: 4
+    })],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: () => realloc0,
+    importFn: _trampoline21
+  }
+))) : _lowerImportBackwardsCompat.bind(
+  null,
+  {
+    trampolineIdx: 21,
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: _trampoline21.manuallyAsync,
+    paramLiftFns: [],
+    resultLowerFns: [_lowerFlatList({
+      elemLowerFn: _lowerFlatTuple({ elemLowerMetas: [[_lowerFlatOwn({
+        componentIdx: 0,
+        tableIdx: 3,
+        lowerFn: function lowerImportedOwnedHost_Descriptor2(obj) {
+          if (!(obj instanceof Descriptor3)) {
+            throw new TypeError('Resource error: Not a valid "Descriptor" resource.');
+          }
+          let handle = obj[symbolRscHandle];
+          if (!handle) {
+            const rep2 = obj[symbolRscRep] || ++captureCnt3;
+            captureTable3.set(rep2, obj);
+            handle = rscTableCreateOwn(handleTable3, rep2);
+          }
+          return handle;
+        }
+      }), 4, 4], [_lowerFlatStringAny, 8, 4]], size32: 12, align32: 4 }),
+      elemSize32: 12,
+      elemAlign32: 4
+    })],
+    hasResultPointer: true,
+    funcTypeIsAsync: false,
+    getCallbackFn: () => null,
+    getPostReturnFn: () => null,
+    isCancellable: false,
+    memoryIdx: 0,
+    stringEncoding: "utf8",
+    getMemoryFn: () => memory0,
+    getReallocFn: () => realloc0,
+    importFn: _trampoline21
+  }
+);
 var $init = (() => {
   let gen = (function* _initGenerator() {
     const module0 = fetchCompile(new URL("./protocol.core.wasm", import.meta.url));
-    ({ exports: exports0 } = yield instantiateCore(yield module0));
-    memory0 = exports0.memory;
-    realloc0 = exports0.cabi_realloc;
+    const module1 = fetchCompile(new URL("./protocol.core2.wasm", import.meta.url));
+    const module2 = base64Compile("AGFzbQEAAAABNQlgAn9/AX9gA39+fwF/YAR/f39/AX9gAX8AYAF/AGACf38AYAN/fn8AYAR/f39/AGACfn8AAxQTAAAAAQIDBAQFBgUFBQUHBQcIBAQFAXABExMHYRQBMAAAATEAAQEyAAIBMwADATQABAE1AAUBNgAGATcABwE4AAgBOQAJAjEwAAoCMTEACwIxMgAMAjEzAA0CMTQADgIxNQAPAjE2ABACMTcAEQIxOAASCCRpbXBvcnRzAQAK7QETCwAgACABQQARAAALCwAgACABQQERAAALCwAgACABQQIRAAALDQAgACABIAJBAxEBAAsPACAAIAEgAiADQQQRAgALCQAgAEEFEQMACwkAIABBBhEEAAsJACAAQQcRBAALCwAgACABQQgRBQALDQAgACABIAJBCREGAAsLACAAIAFBChEFAAsLACAAIAFBCxEFAAsLACAAIAFBDBEFAAsLACAAIAFBDREFAAsPACAAIAEgAiADQQ4RBwALCwAgACABQQ8RBQALDwAgACABIAIgA0EQEQcACwsAIAAgAUEREQgACwkAIABBEhEEAAsALwlwcm9kdWNlcnMBDHByb2Nlc3NlZC1ieQENd2l0LWNvbXBvbmVudAcwLjIyNy4xAM0IBG5hbWUAExJ3aXQtY29tcG9uZW50OnNoaW0BsAgTACdhZGFwdC13YXNpX3NuYXBzaG90X3ByZXZpZXcxLXJhbmRvbV9nZXQBKGFkYXB0LXdhc2lfc25hcHNob3RfcHJldmlldzEtZW52aXJvbl9nZXQCLmFkYXB0LXdhc2lfc25hcHNob3RfcHJldmlldzEtZW52aXJvbl9zaXplc19nZXQDK2FkYXB0LXdhc2lfc25hcHNob3RfcHJldmlldzEtY2xvY2tfdGltZV9nZXQEJWFkYXB0LXdhc2lfc25hcHNob3RfcHJldmlldzEtZmRfd3JpdGUFJmFkYXB0LXdhc2lfc25hcHNob3RfcHJldmlldzEtcHJvY19leGl0BjNpbmRpcmVjdC13YXNpOmNsaS9lbnZpcm9ubWVudEAwLjIuMy1nZXQtZW52aXJvbm1lbnQHKWluZGlyZWN0LXdhc2k6Y2xvY2tzL3dhbGwtY2xvY2tAMC4yLjMtbm93CDppbmRpcmVjdC13YXNpOmZpbGVzeXN0ZW0vdHlwZXNAMC4yLjMtZmlsZXN5c3RlbS1lcnJvci1jb2RlCUhpbmRpcmVjdC13YXNpOmZpbGVzeXN0ZW0vdHlwZXNAMC4yLjMtW21ldGhvZF1kZXNjcmlwdG9yLndyaXRlLXZpYS1zdHJlYW0KSWluZGlyZWN0LXdhc2k6ZmlsZXN5c3RlbS90eXBlc0AwLjIuMy1bbWV0aG9kXWRlc2NyaXB0b3IuYXBwZW5kLXZpYS1zdHJlYW0LQGluZGlyZWN0LXdhc2k6ZmlsZXN5c3RlbS90eXBlc0AwLjIuMy1bbWV0aG9kXWRlc2NyaXB0b3IuZ2V0LXR5cGUMPGluZGlyZWN0LXdhc2k6ZmlsZXN5c3RlbS90eXBlc0AwLjIuMy1bbWV0aG9kXWRlc2NyaXB0b3Iuc3RhdA1AaW5kaXJlY3Qtd2FzaTppby9zdHJlYW1zQDAuMi4zLVttZXRob2Rdb3V0cHV0LXN0cmVhbS5jaGVjay13cml0ZQ46aW5kaXJlY3Qtd2FzaTppby9zdHJlYW1zQDAuMi4zLVttZXRob2Rdb3V0cHV0LXN0cmVhbS53cml0ZQ9DaW5kaXJlY3Qtd2FzaTppby9zdHJlYW1zQDAuMi4zLVttZXRob2Rdb3V0cHV0LXN0cmVhbS5ibG9ja2luZy1mbHVzaBBNaW5kaXJlY3Qtd2FzaTppby9zdHJlYW1zQDAuMi4zLVttZXRob2Rdb3V0cHV0LXN0cmVhbS5ibG9ja2luZy13cml0ZS1hbmQtZmx1c2gRMmluZGlyZWN0LXdhc2k6cmFuZG9tL3JhbmRvbUAwLjIuMy1nZXQtcmFuZG9tLWJ5dGVzEjdpbmRpcmVjdC13YXNpOmZpbGVzeXN0ZW0vcHJlb3BlbnNAMC4yLjItZ2V0LWRpcmVjdG9yaWVz");
+    const module3 = base64Compile("AGFzbQEAAAABNQlgAn9/AX9gA39+fwF/YAR/f39/AX9gAX8AYAF/AGACf38AYAN/fn8AYAR/f39/AGACfn8AAngUAAEwAAAAATEAAAABMgAAAAEzAAEAATQAAgABNQADAAE2AAQAATcABAABOAAFAAE5AAYAAjEwAAUAAjExAAUAAjEyAAUAAjEzAAUAAjE0AAcAAjE1AAUAAjE2AAcAAjE3AAgAAjE4AAQACCRpbXBvcnRzAXABExMJGQEAQQALEwABAgMEBQYHCAkKCwwNDg8QERIALwlwcm9kdWNlcnMBDHByb2Nlc3NlZC1ieQENd2l0LWNvbXBvbmVudAcwLjIyNy4xABwEbmFtZQAVFHdpdC1jb21wb25lbnQ6Zml4dXBz");
+    const instanceFlags0 = new WebAssembly.Global({ value: "i32", mutable: true }, 1);
+    INSTANCE_FLAGS.set(0, instanceFlags0);
+    ({ exports: exports0 } = yield instantiateCore(yield module2));
+    ({ exports: exports1 } = yield instantiateCore(yield module0, {
+      wasi_snapshot_preview1: {
+        clock_time_get: Object.assign(exports0["3"], { _jcoMaySuspend: false }),
+        environ_get: Object.assign(exports0["1"], { _jcoMaySuspend: false }),
+        environ_sizes_get: Object.assign(exports0["2"], { _jcoMaySuspend: false }),
+        fd_write: Object.assign(exports0["4"], { _jcoMaySuspend: false }),
+        proc_exit: Object.assign(exports0["5"], { _jcoMaySuspend: false }),
+        random_get: Object.assign(exports0["0"], { _jcoMaySuspend: false })
+      }
+    }));
+    ({ exports: exports2 } = yield instantiateCore(yield module1, {
+      __main_module__: {
+        cabi_realloc: Object.assign(exports1.cabi_realloc, { _jcoMaySuspend: false })
+      },
+      env: {
+        memory: exports1.memory
+      },
+      "wasi:cli/environment@0.2.3": {
+        "get-environment": Object.assign(exports0["6"], { _jcoMaySuspend: false })
+      },
+      "wasi:cli/exit@0.2.3": {
+        exit: Object.assign(trampoline8, { _jcoMaySuspend: false })
+      },
+      "wasi:cli/stderr@0.2.3": {
+        "get-stderr": Object.assign(trampoline5, { _jcoMaySuspend: false })
+      },
+      "wasi:cli/stdin@0.2.3": {
+        "get-stdin": Object.assign(trampoline6, { _jcoMaySuspend: false })
+      },
+      "wasi:cli/stdout@0.2.3": {
+        "get-stdout": Object.assign(trampoline7, { _jcoMaySuspend: false })
+      },
+      "wasi:clocks/monotonic-clock@0.2.3": {
+        now: Object.assign(trampoline0, { _jcoMaySuspend: false })
+      },
+      "wasi:clocks/wall-clock@0.2.3": {
+        now: Object.assign(exports0["7"], { _jcoMaySuspend: false })
+      },
+      "wasi:filesystem/preopens@0.2.2": {
+        "get-directories": Object.assign(exports0["18"], { _jcoMaySuspend: false })
+      },
+      "wasi:filesystem/types@0.2.3": {
+        "[method]descriptor.append-via-stream": Object.assign(exports0["10"], { _jcoMaySuspend: false }),
+        "[method]descriptor.get-type": Object.assign(exports0["11"], { _jcoMaySuspend: false }),
+        "[method]descriptor.stat": Object.assign(exports0["12"], { _jcoMaySuspend: false }),
+        "[method]descriptor.write-via-stream": Object.assign(exports0["9"], { _jcoMaySuspend: false }),
+        "[resource-drop]descriptor": Object.assign(_guardMayLeave(0, trampoline1), { _jcoMaySuspend: false }),
+        "filesystem-error-code": Object.assign(exports0["8"], { _jcoMaySuspend: false })
+      },
+      "wasi:io/error@0.2.3": {
+        "[resource-drop]error": Object.assign(_guardMayLeave(0, trampoline3), { _jcoMaySuspend: false })
+      },
+      "wasi:io/streams@0.2.3": {
+        "[method]output-stream.blocking-flush": Object.assign(exports0["15"], { _jcoMaySuspend: false }),
+        "[method]output-stream.blocking-write-and-flush": Object.assign(exports0["16"], { _jcoMaySuspend: false }),
+        "[method]output-stream.check-write": Object.assign(exports0["13"], { _jcoMaySuspend: false }),
+        "[method]output-stream.write": Object.assign(exports0["14"], { _jcoMaySuspend: false }),
+        "[resource-drop]input-stream": Object.assign(_guardMayLeave(0, trampoline4), { _jcoMaySuspend: false }),
+        "[resource-drop]output-stream": Object.assign(_guardMayLeave(0, trampoline2), { _jcoMaySuspend: false })
+      },
+      "wasi:random/random@0.2.3": {
+        "get-random-bytes": Object.assign(exports0["17"], { _jcoMaySuspend: false })
+      }
+    }));
+    memory0 = exports1.memory;
+    realloc0 = exports2.cabi_import_realloc;
     try {
-      realloc0Async = WebAssembly.promising(exports0.cabi_realloc);
+      realloc0Async = WebAssembly.promising(exports2.cabi_import_realloc);
     } catch (err) {
-      realloc0Async = exports0.cabi_realloc;
+      realloc0Async = exports2.cabi_import_realloc;
     }
-    postReturn0 = exports0["cabi_post_snows:qr-data-transport/protocol#decode"];
+    ({ exports: exports3 } = yield instantiateCore(yield module3, {
+      "": {
+        $imports: exports0.$imports,
+        "0": Object.assign(exports2.random_get, { _jcoMaySuspend: false }),
+        "1": Object.assign(exports2.environ_get, { _jcoMaySuspend: false }),
+        "10": Object.assign(trampoline13, { _jcoMaySuspend: false }),
+        "11": Object.assign(trampoline14, { _jcoMaySuspend: false }),
+        "12": Object.assign(trampoline15, { _jcoMaySuspend: false }),
+        "13": Object.assign(trampoline16, { _jcoMaySuspend: false }),
+        "14": Object.assign(trampoline17, { _jcoMaySuspend: false }),
+        "15": Object.assign(trampoline18, { _jcoMaySuspend: false }),
+        "16": Object.assign(trampoline19, { _jcoMaySuspend: false }),
+        "17": Object.assign(trampoline20, { _jcoMaySuspend: false }),
+        "18": Object.assign(trampoline21, { _jcoMaySuspend: false }),
+        "2": Object.assign(exports2.environ_sizes_get, { _jcoMaySuspend: false }),
+        "3": Object.assign(exports2.clock_time_get, { _jcoMaySuspend: false }),
+        "4": Object.assign(exports2.fd_write, { _jcoMaySuspend: false }),
+        "5": Object.assign(exports2.proc_exit, { _jcoMaySuspend: false }),
+        "6": Object.assign(trampoline9, { _jcoMaySuspend: false }),
+        "7": Object.assign(trampoline10, { _jcoMaySuspend: false }),
+        "8": Object.assign(trampoline11, { _jcoMaySuspend: false }),
+        "9": Object.assign(trampoline12, { _jcoMaySuspend: false })
+      }
+    }));
+    realloc1 = exports1.cabi_realloc;
     try {
-      postReturn0Async = WebAssembly.promising(exports0["cabi_post_snows:qr-data-transport/protocol#decode"]);
+      realloc1Async = WebAssembly.promising(exports1.cabi_realloc);
     } catch (err) {
-      postReturn0Async = exports0["cabi_post_snows:qr-data-transport/protocol#decode"];
+      realloc1Async = exports1.cabi_realloc;
     }
-    protocolDecode = exports0["snows:qr-data-transport/protocol#decode"];
+    postReturn0 = exports1["cabi_post_snows:qr-data-transport/protocol#encode-bytes"];
+    try {
+      postReturn0Async = WebAssembly.promising(exports1["cabi_post_snows:qr-data-transport/protocol#encode-bytes"]);
+    } catch (err) {
+      postReturn0Async = exports1["cabi_post_snows:qr-data-transport/protocol#encode-bytes"];
+    }
+    postReturn1 = exports1["cabi_post_snows:qr-data-transport/protocol#parse-frame"];
+    try {
+      postReturn1Async = WebAssembly.promising(exports1["cabi_post_snows:qr-data-transport/protocol#parse-frame"]);
+    } catch (err) {
+      postReturn1Async = exports1["cabi_post_snows:qr-data-transport/protocol#parse-frame"];
+    }
+    postReturn2 = exports1["cabi_post_snows:qr-data-transport/protocol#decode-frames"];
+    try {
+      postReturn2Async = WebAssembly.promising(exports1["cabi_post_snows:qr-data-transport/protocol#decode-frames"]);
+    } catch (err) {
+      postReturn2Async = exports1["cabi_post_snows:qr-data-transport/protocol#decode-frames"];
+    }
+    postReturn3 = exports1["cabi_post_snows:qr-data-transport/protocol#generate-qr-matrix"];
+    try {
+      postReturn3Async = WebAssembly.promising(exports1["cabi_post_snows:qr-data-transport/protocol#generate-qr-matrix"]);
+    } catch (err) {
+      postReturn3Async = exports1["cabi_post_snows:qr-data-transport/protocol#generate-qr-matrix"];
+    }
+    postReturn4 = exports1["cabi_post_snows:qr-data-transport/protocol#decode-qr-image"];
+    try {
+      postReturn4Async = WebAssembly.promising(exports1["cabi_post_snows:qr-data-transport/protocol#decode-qr-image"]);
+    } catch (err) {
+      postReturn4Async = exports1["cabi_post_snows:qr-data-transport/protocol#decode-qr-image"];
+    }
+    protocolEncodeBytes = exports1["snows:qr-data-transport/protocol#encode-bytes"];
+    protocolEncodeText = exports1["snows:qr-data-transport/protocol#encode-text"];
+    protocolParseFrame = exports1["snows:qr-data-transport/protocol#parse-frame"];
+    protocolDecodeFrames = exports1["snows:qr-data-transport/protocol#decode-frames"];
+    protocolGenerateQrMatrix = exports1["snows:qr-data-transport/protocol#generate-qr-matrix"];
+    protocolDecodeQrImage = exports1["snows:qr-data-transport/protocol#decode-qr-image"];
   })();
   let promise, resolve, reject;
   function normalizeInstantiationError(e) {
@@ -2496,14 +10168,14 @@ var $init = (() => {
 })();
 await $init;
 var protocol = {
-  decode
+  decodeFrames,
+  decodeQrImage,
+  encodeBytes,
+  encodeText,
+  generateQrMatrix,
+  parseFrame
 };
-
-// src/main.ts
-var input = new Uint8Array([1, 2, 127, 128, 255]);
-var output = protocol.decode(input);
 export {
-  input,
-  output
+  protocol
 };
 //# sourceMappingURL=index.js.map

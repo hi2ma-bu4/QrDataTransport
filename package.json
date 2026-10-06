@@ -22,7 +22,8 @@
     "build": "npm run build:wasm && npm run build:wasm:transpile && npm run build:typecheck && npm run build:js && npm run build:dts",
     "test:wasm": "cargo test --manifest-path wasm/protocol/Cargo.toml",
     "test:node": "tsx --test \"test/node/*.test.ts\"",
-    "test": "npm run test:wasm && npm run test:node"
+    "test": "npm run test:wasm && npm run test:node",
+    "dev": "npx serve ."
   },
   "volta": {
     "node": "24.21.0",

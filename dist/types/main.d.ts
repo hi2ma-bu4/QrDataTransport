@@ -1,4 +1,3 @@
-declare const input: Uint8Array<ArrayBuffer>;
-declare const output: Uint8Array<ArrayBufferLike>;
-export { input, output };
+import { protocol } from "./wasm/protocol.js";
+export { protocol };
 //# sourceMappingURL=main.d.ts.map

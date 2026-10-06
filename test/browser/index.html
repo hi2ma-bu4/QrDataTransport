@@ -7,7 +7,40 @@
 </head>
 <body>
 	<h1>QrDataTransport Browser Test</h1>
-	<pre id="result">Running...</pre>
+
+	<section>
+		<h2>Input</h2>
+
+		<label>
+			<input type="radio" name="input-type" value="string" checked>
+			String
+		</label>
+		<label>
+			<input type="radio" name="input-type" value="file">
+			File
+		</label>
+
+		<div id="string-input">
+			<textarea id="input-text" rows="8" cols="60">hello world</textarea>
+		</div>
+
+		<div id="file-input" hidden>
+			<input id="input-file" type="file">
+		</div>
+	</section>
+
+	<section>
+		<h2>Options</h2>
+
+		<label>
+			Max Frame Bits:
+			<input id="max-frame-bits" type="number" value="100" min="10">
+		</label>
+	</section>
+
+	<button id="test" type="button">Test</button>
+
+	<pre id="result">Ready.</pre>
 
 	<script type="module" src="./main.mjs"></script>
 </body>

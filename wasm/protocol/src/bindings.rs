@@ -12,52 +12,970 @@ pub mod exports {
                 #[doc(hidden)]
                 static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
                 use super::super::super::super::_rt;
+                #[repr(u8)]
+                #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+                pub enum DataType {
+                    Uint8array,
+                    BytesString,
+                }
+                impl ::core::fmt::Debug for DataType {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        match self {
+                            DataType::Uint8array => {
+                                f.debug_tuple("DataType::Uint8array").finish()
+                            }
+                            DataType::BytesString => {
+                                f.debug_tuple("DataType::BytesString").finish()
+                            }
+                        }
+                    }
+                }
+                impl DataType {
+                    #[doc(hidden)]
+                    pub unsafe fn _lift(val: u8) -> DataType {
+                        if !cfg!(debug_assertions) {
+                            return ::core::mem::transmute(val);
+                        }
+                        match val {
+                            0 => DataType::Uint8array,
+                            1 => DataType::BytesString,
+                            _ => panic!("invalid enum discriminant"),
+                        }
+                    }
+                }
+                #[repr(u8)]
+                #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+                pub enum StringMode {
+                    Ascii,
+                    Utf8,
+                }
+                impl ::core::fmt::Debug for StringMode {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        match self {
+                            StringMode::Ascii => {
+                                f.debug_tuple("StringMode::Ascii").finish()
+                            }
+                            StringMode::Utf8 => {
+                                f.debug_tuple("StringMode::Utf8").finish()
+                            }
+                        }
+                    }
+                }
+                impl StringMode {
+                    #[doc(hidden)]
+                    pub unsafe fn _lift(val: u8) -> StringMode {
+                        if !cfg!(debug_assertions) {
+                            return ::core::mem::transmute(val);
+                        }
+                        match val {
+                            0 => StringMode::Ascii,
+                            1 => StringMode::Utf8,
+                            _ => panic!("invalid enum discriminant"),
+                        }
+                    }
+                }
+                #[repr(u8)]
+                #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+                pub enum QrEcLevel {
+                    L,
+                    M,
+                    Q,
+                    H,
+                }
+                impl ::core::fmt::Debug for QrEcLevel {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        match self {
+                            QrEcLevel::L => f.debug_tuple("QrEcLevel::L").finish(),
+                            QrEcLevel::M => f.debug_tuple("QrEcLevel::M").finish(),
+                            QrEcLevel::Q => f.debug_tuple("QrEcLevel::Q").finish(),
+                            QrEcLevel::H => f.debug_tuple("QrEcLevel::H").finish(),
+                        }
+                    }
+                }
+                impl QrEcLevel {
+                    #[doc(hidden)]
+                    pub unsafe fn _lift(val: u8) -> QrEcLevel {
+                        if !cfg!(debug_assertions) {
+                            return ::core::mem::transmute(val);
+                        }
+                        match val {
+                            0 => QrEcLevel::L,
+                            1 => QrEcLevel::M,
+                            2 => QrEcLevel::Q,
+                            3 => QrEcLevel::H,
+                            _ => panic!("invalid enum discriminant"),
+                        }
+                    }
+                }
+                #[repr(C)]
+                #[derive(Clone, Copy)]
+                pub struct FrameMetadata {
+                    pub is_first: bool,
+                    pub version: u8,
+                    pub total_qr_count: u32,
+                    pub frame_number: u32,
+                    pub data_type: Option<DataType>,
+                    pub payload_bit_len: u32,
+                    pub frame_crc: u16,
+                    pub overall_crc: Option<u32>,
+                    pub crc_valid: bool,
+                }
+                impl ::core::fmt::Debug for FrameMetadata {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("FrameMetadata")
+                            .field("is-first", &self.is_first)
+                            .field("version", &self.version)
+                            .field("total-qr-count", &self.total_qr_count)
+                            .field("frame-number", &self.frame_number)
+                            .field("data-type", &self.data_type)
+                            .field("payload-bit-len", &self.payload_bit_len)
+                            .field("frame-crc", &self.frame_crc)
+                            .field("overall-crc", &self.overall_crc)
+                            .field("crc-valid", &self.crc_valid)
+                            .finish()
+                    }
+                }
+                #[derive(Clone)]
+                pub enum DecodedPayload {
+                    Bytes(_rt::Vec<u8>),
+                    Text(_rt::String),
+                }
+                impl ::core::fmt::Debug for DecodedPayload {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        match self {
+                            DecodedPayload::Bytes(e) => {
+                                f.debug_tuple("DecodedPayload::Bytes").field(e).finish()
+                            }
+                            DecodedPayload::Text(e) => {
+                                f.debug_tuple("DecodedPayload::Text").field(e).finish()
+                            }
+                        }
+                    }
+                }
+                #[derive(Clone)]
+                pub struct EncodedFrameOutput {
+                    pub wire_bytes: _rt::Vec<u8>,
+                    pub frame_number: u32,
+                    pub total_qr_count: u32,
+                }
+                impl ::core::fmt::Debug for EncodedFrameOutput {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("EncodedFrameOutput")
+                            .field("wire-bytes", &self.wire_bytes)
+                            .field("frame-number", &self.frame_number)
+                            .field("total-qr-count", &self.total_qr_count)
+                            .finish()
+                    }
+                }
+                #[derive(Clone)]
+                pub struct EncodeResult {
+                    pub frames: _rt::Vec<EncodedFrameOutput>,
+                }
+                impl ::core::fmt::Debug for EncodeResult {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("EncodeResult")
+                            .field("frames", &self.frames)
+                            .finish()
+                    }
+                }
+                /// Generates QR module grid (binary 0/1 array, width, height) from wire frame bytes using qrcodegen
+                #[derive(Clone)]
+                pub struct QrModuleMatrix {
+                    pub width: u32,
+                    pub height: u32,
+                    pub modules: _rt::Vec<u8>,
+                }
+                impl ::core::fmt::Debug for QrModuleMatrix {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("QrModuleMatrix")
+                            .field("width", &self.width)
+                            .field("height", &self.height)
+                            .field("modules", &self.modules)
+                            .finish()
+                    }
+                }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_decode_cabi<T: Guest>(
+                pub unsafe fn _export_encode_bytes_cabi<T: Guest>(
                     arg0: *mut u8,
                     arg1: usize,
+                    arg2: i32,
                 ) -> *mut u8 {
                     #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
                     let len0 = arg1;
-                    let result1 = T::decode(
+                    let result1 = T::encode_bytes(
                         _rt::Vec::from_raw_parts(arg0.cast(), len0, len0),
+                        arg2 as u32,
                     );
                     let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
-                    let vec3 = (result1).into_boxed_slice();
-                    let ptr3 = vec3.as_ptr().cast::<u8>();
-                    let len3 = vec3.len();
-                    ::core::mem::forget(vec3);
-                    *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<usize>() = len3;
-                    *ptr2.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            let EncodeResult { frames: frames3 } = e;
+                            let vec6 = frames3;
+                            let len6 = vec6.len();
+                            let layout6 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec6.len() * (8 + 2 * ::core::mem::size_of::<*const u8>()),
+                                ::core::mem::size_of::<*const u8>(),
+                            );
+                            let result6 = if layout6.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout6).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout6);
+                                }
+                                ptr
+                            } else {
+                                ::core::ptr::null_mut()
+                            };
+                            for (i, e) in vec6.into_iter().enumerate() {
+                                let base = result6
+                                    .add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    let EncodedFrameOutput {
+                                        wire_bytes: wire_bytes4,
+                                        frame_number: frame_number4,
+                                        total_qr_count: total_qr_count4,
+                                    } = e;
+                                    let vec5 = (wire_bytes4).into_boxed_slice();
+                                    let ptr5 = vec5.as_ptr().cast::<u8>();
+                                    let len5 = vec5.len();
+                                    ::core::mem::forget(vec5);
+                                    *base
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len5;
+                                    *base.add(0).cast::<*mut u8>() = ptr5.cast_mut();
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<i32>() = _rt::as_i32(frame_number4);
+                                    *base
+                                        .add(4 + 2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<i32>() = _rt::as_i32(total_qr_count4);
+                                }
+                            }
+                            *ptr2
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len6;
+                            *ptr2
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = result6;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec7 = (e.into_bytes()).into_boxed_slice();
+                            let ptr7 = vec7.as_ptr().cast::<u8>();
+                            let len7 = vec7.len();
+                            ::core::mem::forget(vec7);
+                            *ptr2
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len7;
+                            *ptr2
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr7.cast_mut();
+                        }
+                    };
                     ptr2
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn __post_return_decode<T: Guest>(arg0: *mut u8) {
-                    let l0 = *arg0.add(0).cast::<*mut u8>();
-                    let l1 = *arg0
-                        .add(::core::mem::size_of::<*const u8>())
-                        .cast::<usize>();
-                    let base2 = l0;
-                    let len2 = l1;
-                    _rt::cabi_dealloc(base2, len2 * 1, 1);
+                pub unsafe fn __post_return_encode_bytes<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l2 = *arg0
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let base6 = l1;
+                            let len6 = l2;
+                            for i in 0..len6 {
+                                let base = base6
+                                    .add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    let l3 = *base.add(0).cast::<*mut u8>();
+                                    let l4 = *base
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>();
+                                    let base5 = l3;
+                                    let len5 = l4;
+                                    _rt::cabi_dealloc(base5, len5 * 1, 1);
+                                }
+                            }
+                            _rt::cabi_dealloc(
+                                base6,
+                                len6 * (8 + 2 * ::core::mem::size_of::<*const u8>()),
+                                ::core::mem::size_of::<*const u8>(),
+                            );
+                        }
+                        _ => {
+                            let l7 = *arg0
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l8 = *arg0
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            _rt::cabi_dealloc(l7, l8, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_encode_text_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                    arg2: i32,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::encode_text(_rt::string_lift(bytes0), arg2 as u32);
+                    let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            let EncodeResult { frames: frames3 } = e;
+                            let vec6 = frames3;
+                            let len6 = vec6.len();
+                            let layout6 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec6.len() * (8 + 2 * ::core::mem::size_of::<*const u8>()),
+                                ::core::mem::size_of::<*const u8>(),
+                            );
+                            let result6 = if layout6.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout6).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout6);
+                                }
+                                ptr
+                            } else {
+                                ::core::ptr::null_mut()
+                            };
+                            for (i, e) in vec6.into_iter().enumerate() {
+                                let base = result6
+                                    .add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    let EncodedFrameOutput {
+                                        wire_bytes: wire_bytes4,
+                                        frame_number: frame_number4,
+                                        total_qr_count: total_qr_count4,
+                                    } = e;
+                                    let vec5 = (wire_bytes4).into_boxed_slice();
+                                    let ptr5 = vec5.as_ptr().cast::<u8>();
+                                    let len5 = vec5.len();
+                                    ::core::mem::forget(vec5);
+                                    *base
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len5;
+                                    *base.add(0).cast::<*mut u8>() = ptr5.cast_mut();
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<i32>() = _rt::as_i32(frame_number4);
+                                    *base
+                                        .add(4 + 2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<i32>() = _rt::as_i32(total_qr_count4);
+                                }
+                            }
+                            *ptr2
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len6;
+                            *ptr2
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = result6;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec7 = (e.into_bytes()).into_boxed_slice();
+                            let ptr7 = vec7.as_ptr().cast::<u8>();
+                            let len7 = vec7.len();
+                            ::core::mem::forget(vec7);
+                            *ptr2
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len7;
+                            *ptr2
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr7.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_encode_text<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l2 = *arg0
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let base6 = l1;
+                            let len6 = l2;
+                            for i in 0..len6 {
+                                let base = base6
+                                    .add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    let l3 = *base.add(0).cast::<*mut u8>();
+                                    let l4 = *base
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>();
+                                    let base5 = l3;
+                                    let len5 = l4;
+                                    _rt::cabi_dealloc(base5, len5 * 1, 1);
+                                }
+                            }
+                            _rt::cabi_dealloc(
+                                base6,
+                                len6 * (8 + 2 * ::core::mem::size_of::<*const u8>()),
+                                ::core::mem::size_of::<*const u8>(),
+                            );
+                        }
+                        _ => {
+                            let l7 = *arg0
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l8 = *arg0
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            _rt::cabi_dealloc(l7, l8, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_parse_frame_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                    arg2: i32,
+                    arg3: i32,
+                    arg4: i32,
+                    arg5: i32,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let result1 = T::parse_frame(
+                        _rt::Vec::from_raw_parts(arg0.cast(), len0, len0),
+                        match arg2 {
+                            0 => None,
+                            1 => {
+                                let e = arg3 as u32;
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                        match arg4 {
+                            0 => None,
+                            1 => {
+                                let e = arg5 as u16;
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
+                    let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            let FrameMetadata {
+                                is_first: is_first3,
+                                version: version3,
+                                total_qr_count: total_qr_count3,
+                                frame_number: frame_number3,
+                                data_type: data_type3,
+                                payload_bit_len: payload_bit_len3,
+                                frame_crc: frame_crc3,
+                                overall_crc: overall_crc3,
+                                crc_valid: crc_valid3,
+                            } = e;
+                            *ptr2
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (match is_first3 {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                            *ptr2
+                                .add(1 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (_rt::as_i32(version3)) as u8;
+                            *ptr2
+                                .add(4 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(total_qr_count3);
+                            *ptr2
+                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(frame_number3);
+                            match data_type3 {
+                                Some(e) => {
+                                    *ptr2
+                                        .add(12 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    *ptr2
+                                        .add(13 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (e.clone() as i32) as u8;
+                                }
+                                None => {
+                                    *ptr2
+                                        .add(12 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                            *ptr2
+                                .add(16 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(payload_bit_len3);
+                            *ptr2
+                                .add(20 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u16>() = (_rt::as_i32(frame_crc3)) as u16;
+                            match overall_crc3 {
+                                Some(e) => {
+                                    *ptr2
+                                        .add(24 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    *ptr2
+                                        .add(28 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<i32>() = _rt::as_i32(e);
+                                }
+                                None => {
+                                    *ptr2
+                                        .add(24 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                            *ptr2
+                                .add(32 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (match crc_valid3 {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec4 = (e.into_bytes()).into_boxed_slice();
+                            let ptr4 = vec4.as_ptr().cast::<u8>();
+                            let len4 = vec4.len();
+                            ::core::mem::forget(vec4);
+                            *ptr2
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len4;
+                            *ptr2
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr4.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_parse_frame<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {}
+                        _ => {
+                            let l1 = *arg0
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l2 = *arg0
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_decode_frames_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let base3 = arg0;
+                    let len3 = arg1;
+                    let mut result3 = _rt::Vec::with_capacity(len3);
+                    for i in 0..len3 {
+                        let base = base3
+                            .add(i * (2 * ::core::mem::size_of::<*const u8>()));
+                        let e3 = {
+                            let l0 = *base.add(0).cast::<*mut u8>();
+                            let l1 = *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len2 = l1;
+                            _rt::Vec::from_raw_parts(l0.cast(), len2, len2)
+                        };
+                        result3.push(e3);
+                    }
+                    _rt::cabi_dealloc(
+                        base3,
+                        len3 * (2 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result4 = T::decode_frames(result3);
+                    let ptr5 = (&raw mut _RET_AREA.0).cast::<u8>();
+                    match result4 {
+                        Ok(e) => {
+                            *ptr5.add(0).cast::<u8>() = (0i32) as u8;
+                            match e {
+                                DecodedPayload::Bytes(e) => {
+                                    *ptr5
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                    let vec6 = (e).into_boxed_slice();
+                                    let ptr6 = vec6.as_ptr().cast::<u8>();
+                                    let len6 = vec6.len();
+                                    ::core::mem::forget(vec6);
+                                    *ptr5
+                                        .add(3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len6;
+                                    *ptr5
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>() = ptr6.cast_mut();
+                                }
+                                DecodedPayload::Text(e) => {
+                                    *ptr5
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    let vec7 = (e.into_bytes()).into_boxed_slice();
+                                    let ptr7 = vec7.as_ptr().cast::<u8>();
+                                    let len7 = vec7.len();
+                                    ::core::mem::forget(vec7);
+                                    *ptr5
+                                        .add(3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len7;
+                                    *ptr5
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>() = ptr7.cast_mut();
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            *ptr5.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec8 = (e.into_bytes()).into_boxed_slice();
+                            let ptr8 = vec8.as_ptr().cast::<u8>();
+                            let len8 = vec8.len();
+                            ::core::mem::forget(vec8);
+                            *ptr5
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len8;
+                            *ptr5
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr8.cast_mut();
+                        }
+                    };
+                    ptr5
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_decode_frames<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = i32::from(
+                                *arg0.add(::core::mem::size_of::<*const u8>()).cast::<u8>(),
+                            );
+                            match l1 {
+                                0 => {
+                                    let l2 = *arg0
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>();
+                                    let l3 = *arg0
+                                        .add(3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>();
+                                    let base4 = l2;
+                                    let len4 = l3;
+                                    _rt::cabi_dealloc(base4, len4 * 1, 1);
+                                }
+                                _ => {
+                                    let l5 = *arg0
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>();
+                                    let l6 = *arg0
+                                        .add(3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>();
+                                    _rt::cabi_dealloc(l5, l6, 1);
+                                }
+                            }
+                        }
+                        _ => {
+                            let l7 = *arg0
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l8 = *arg0
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            _rt::cabi_dealloc(l7, l8, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_generate_qr_matrix_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                    arg2: i32,
+                    arg3: i32,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let result1 = T::generate_qr_matrix(
+                        _rt::Vec::from_raw_parts(arg0.cast(), len0, len0),
+                        arg2 as u8,
+                        QrEcLevel::_lift(arg3 as u8),
+                    );
+                    let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            let QrModuleMatrix {
+                                width: width3,
+                                height: height3,
+                                modules: modules3,
+                            } = e;
+                            *ptr2
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(width3);
+                            *ptr2
+                                .add(4 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i32>() = _rt::as_i32(height3);
+                            let vec4 = (modules3).into_boxed_slice();
+                            let ptr4 = vec4.as_ptr().cast::<u8>();
+                            let len4 = vec4.len();
+                            ::core::mem::forget(vec4);
+                            *ptr2
+                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len4;
+                            *ptr2
+                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr4.cast_mut();
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec5 = (e.into_bytes()).into_boxed_slice();
+                            let ptr5 = vec5.as_ptr().cast::<u8>();
+                            let len5 = vec5.len();
+                            ::core::mem::forget(vec5);
+                            *ptr2
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len5;
+                            *ptr2
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr5.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_generate_qr_matrix<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0
+                                .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l2 = *arg0
+                                .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let base3 = l1;
+                            let len3 = l2;
+                            _rt::cabi_dealloc(base3, len3 * 1, 1);
+                        }
+                        _ => {
+                            let l4 = *arg0
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l5 = *arg0
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            _rt::cabi_dealloc(l4, l5, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_decode_qr_image_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                    arg2: i32,
+                    arg3: i32,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let result1 = T::decode_qr_image(
+                        _rt::Vec::from_raw_parts(arg0.cast(), len0, len0),
+                        arg2 as u32,
+                        arg3 as u32,
+                    );
+                    let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
+                    match result1 {
+                        Ok(e) => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                            let vec3 = (e).into_boxed_slice();
+                            let ptr3 = vec3.as_ptr().cast::<u8>();
+                            let len3 = vec3.len();
+                            ::core::mem::forget(vec3);
+                            *ptr2
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len3;
+                            *ptr2
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr3.cast_mut();
+                        }
+                        Err(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec4 = (e.into_bytes()).into_boxed_slice();
+                            let ptr4 = vec4.as_ptr().cast::<u8>();
+                            let len4 = vec4.len();
+                            ::core::mem::forget(vec4);
+                            *ptr2
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len4;
+                            *ptr2
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr4.cast_mut();
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_decode_qr_image<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l1 = *arg0
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l2 = *arg0
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let base3 = l1;
+                            let len3 = l2;
+                            _rt::cabi_dealloc(base3, len3 * 1, 1);
+                        }
+                        _ => {
+                            let l4 = *arg0
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l5 = *arg0
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            _rt::cabi_dealloc(l4, l5, 1);
+                        }
+                    }
                 }
                 pub trait Guest {
-                    /// [仮定義] これは型定義サンプルです。実際のデータ構造に合わせて変更してください。そのまま使用してはいけません。
-                    fn decode(data: _rt::Vec<u8>) -> _rt::Vec<u8>;
+                    /// 入力された生のバイトまたは文字列を、max-frame-bits に基づいてスプリット ワイヤー フレームにエンコードします。
+                    fn encode_bytes(
+                        data: _rt::Vec<u8>,
+                        max_frame_bits: u32,
+                    ) -> Result<EncodeResult, _rt::String>;
+                    fn encode_text(
+                        text: _rt::String,
+                        max_frame_bits: u32,
+                    ) -> Result<EncodeResult, _rt::String>;
+                    /// 単一のワイヤー フレームのメタデータを解析し、その CRC を検証します。
+                    fn parse_frame(
+                        wire_bytes: _rt::Vec<u8>,
+                        known_total_qr_count: Option<u32>,
+                        known_first_frame_crc: Option<u16>,
+                    ) -> Result<FrameMetadata, _rt::String>;
+                    /// ワイヤー フレームの完全なリストを復元されたデータ (Uint8Array または String) にデコードします。
+                    fn decode_frames(
+                        wire_frames: _rt::Vec<_rt::Vec<u8>>,
+                    ) -> Result<DecodedPayload, _rt::String>;
+                    fn generate_qr_matrix(
+                        wire_bytes: _rt::Vec<u8>,
+                        qr_version: u8,
+                        ec_level: QrEcLevel,
+                    ) -> Result<QrModuleMatrix, _rt::String>;
+                    /// rxing を使用して QR コード画像ピクセル (RGBA) をワイヤーバイトにデコードします
+                    fn decode_qr_image(
+                        rgba_pixels: _rt::Vec<u8>,
+                        width: u32,
+                        height: u32,
+                    ) -> Result<_rt::Vec<u8>, _rt::String>;
                 }
                 #[doc(hidden)]
                 macro_rules! __export_snows_qr_data_transport_protocol_cabi {
                     ($ty:ident with_types_in $($path_to_types:tt)*) => {
                         const _ : () = { #[unsafe (export_name =
-                        "snows:qr-data-transport/protocol#decode")] unsafe extern "C" fn
-                        export_decode(arg0 : * mut u8, arg1 : usize,) -> * mut u8 {
-                        unsafe { $($path_to_types)*:: _export_decode_cabi::<$ty > (arg0,
-                        arg1) } } #[unsafe (export_name =
-                        "cabi_post_snows:qr-data-transport/protocol#decode")] unsafe
-                        extern "C" fn _post_return_decode(arg0 : * mut u8,) { unsafe {
-                        $($path_to_types)*:: __post_return_decode::<$ty > (arg0) } } };
+                        "snows:qr-data-transport/protocol#encode-bytes")] unsafe extern
+                        "C" fn export_encode_bytes(arg0 : * mut u8, arg1 : usize, arg2 :
+                        i32,) -> * mut u8 { unsafe { $($path_to_types)*::
+                        _export_encode_bytes_cabi::<$ty > (arg0, arg1, arg2) } } #[unsafe
+                        (export_name =
+                        "cabi_post_snows:qr-data-transport/protocol#encode-bytes")]
+                        unsafe extern "C" fn _post_return_encode_bytes(arg0 : * mut u8,)
+                        { unsafe { $($path_to_types)*:: __post_return_encode_bytes::<$ty
+                        > (arg0) } } #[unsafe (export_name =
+                        "snows:qr-data-transport/protocol#encode-text")] unsafe extern
+                        "C" fn export_encode_text(arg0 : * mut u8, arg1 : usize, arg2 :
+                        i32,) -> * mut u8 { unsafe { $($path_to_types)*::
+                        _export_encode_text_cabi::<$ty > (arg0, arg1, arg2) } } #[unsafe
+                        (export_name =
+                        "cabi_post_snows:qr-data-transport/protocol#encode-text")] unsafe
+                        extern "C" fn _post_return_encode_text(arg0 : * mut u8,) { unsafe
+                        { $($path_to_types)*:: __post_return_encode_text::<$ty > (arg0) }
+                        } #[unsafe (export_name =
+                        "snows:qr-data-transport/protocol#parse-frame")] unsafe extern
+                        "C" fn export_parse_frame(arg0 : * mut u8, arg1 : usize, arg2 :
+                        i32, arg3 : i32, arg4 : i32, arg5 : i32,) -> * mut u8 { unsafe {
+                        $($path_to_types)*:: _export_parse_frame_cabi::<$ty > (arg0,
+                        arg1, arg2, arg3, arg4, arg5) } } #[unsafe (export_name =
+                        "cabi_post_snows:qr-data-transport/protocol#parse-frame")] unsafe
+                        extern "C" fn _post_return_parse_frame(arg0 : * mut u8,) { unsafe
+                        { $($path_to_types)*:: __post_return_parse_frame::<$ty > (arg0) }
+                        } #[unsafe (export_name =
+                        "snows:qr-data-transport/protocol#decode-frames")] unsafe extern
+                        "C" fn export_decode_frames(arg0 : * mut u8, arg1 : usize,) -> *
+                        mut u8 { unsafe { $($path_to_types)*::
+                        _export_decode_frames_cabi::<$ty > (arg0, arg1) } } #[unsafe
+                        (export_name =
+                        "cabi_post_snows:qr-data-transport/protocol#decode-frames")]
+                        unsafe extern "C" fn _post_return_decode_frames(arg0 : * mut u8,)
+                        { unsafe { $($path_to_types)*:: __post_return_decode_frames::<$ty
+                        > (arg0) } } #[unsafe (export_name =
+                        "snows:qr-data-transport/protocol#generate-qr-matrix")] unsafe
+                        extern "C" fn export_generate_qr_matrix(arg0 : * mut u8, arg1 :
+                        usize, arg2 : i32, arg3 : i32,) -> * mut u8 { unsafe {
+                        $($path_to_types)*:: _export_generate_qr_matrix_cabi::<$ty >
+                        (arg0, arg1, arg2, arg3) } } #[unsafe (export_name =
+                        "cabi_post_snows:qr-data-transport/protocol#generate-qr-matrix")]
+                        unsafe extern "C" fn _post_return_generate_qr_matrix(arg0 : * mut
+                        u8,) { unsafe { $($path_to_types)*::
+                        __post_return_generate_qr_matrix::<$ty > (arg0) } } #[unsafe
+                        (export_name =
+                        "snows:qr-data-transport/protocol#decode-qr-image")] unsafe
+                        extern "C" fn export_decode_qr_image(arg0 : * mut u8, arg1 :
+                        usize, arg2 : i32, arg3 : i32,) -> * mut u8 { unsafe {
+                        $($path_to_types)*:: _export_decode_qr_image_cabi::<$ty > (arg0,
+                        arg1, arg2, arg3) } } #[unsafe (export_name =
+                        "cabi_post_snows:qr-data-transport/protocol#decode-qr-image")]
+                        unsafe extern "C" fn _post_return_decode_qr_image(arg0 : * mut
+                        u8,) { unsafe { $($path_to_types)*::
+                        __post_return_decode_qr_image::<$ty > (arg0) } } };
                     };
                 }
                 #[doc(hidden)]
@@ -67,11 +985,11 @@ pub mod exports {
                 struct _RetArea(
                     [::core::mem::MaybeUninit<
                         u8,
-                    >; 2 * ::core::mem::size_of::<*const u8>()],
+                    >; 32 + 2 * ::core::mem::size_of::<*const u8>()],
                 );
                 static mut _RET_AREA: _RetArea = _RetArea(
-                    [::core::mem::MaybeUninit::uninit(); 2
-                        * ::core::mem::size_of::<*const u8>()],
+                    [::core::mem::MaybeUninit::uninit(); 32
+                        + 2 * ::core::mem::size_of::<*const u8>()],
                 );
             }
         }
@@ -80,11 +998,72 @@ pub mod exports {
 #[rustfmt::skip]
 mod _rt {
     #![allow(dead_code, clippy::all)]
+    pub use alloc_crate::vec::Vec;
+    pub use alloc_crate::string::String;
     #[cfg(target_arch = "wasm32")]
     pub fn run_ctors_once() {
         wit_bindgen_rt::run_ctors_once();
     }
-    pub use alloc_crate::vec::Vec;
+    pub fn as_i32<T: AsI32>(t: T) -> i32 {
+        t.as_i32()
+    }
+    pub trait AsI32 {
+        fn as_i32(self) -> i32;
+    }
+    impl<'a, T: Copy + AsI32> AsI32 for &'a T {
+        fn as_i32(self) -> i32 {
+            (*self).as_i32()
+        }
+    }
+    impl AsI32 for i32 {
+        #[inline]
+        fn as_i32(self) -> i32 {
+            self as i32
+        }
+    }
+    impl AsI32 for u32 {
+        #[inline]
+        fn as_i32(self) -> i32 {
+            self as i32
+        }
+    }
+    impl AsI32 for i16 {
+        #[inline]
+        fn as_i32(self) -> i32 {
+            self as i32
+        }
+    }
+    impl AsI32 for u16 {
+        #[inline]
+        fn as_i32(self) -> i32 {
+            self as i32
+        }
+    }
+    impl AsI32 for i8 {
+        #[inline]
+        fn as_i32(self) -> i32 {
+            self as i32
+        }
+    }
+    impl AsI32 for u8 {
+        #[inline]
+        fn as_i32(self) -> i32 {
+            self as i32
+        }
+    }
+    impl AsI32 for char {
+        #[inline]
+        fn as_i32(self) -> i32 {
+            self as i32
+        }
+    }
+    impl AsI32 for usize {
+        #[inline]
+        fn as_i32(self) -> i32 {
+            self as i32
+        }
+    }
+    pub use alloc_crate::alloc;
     pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
         if size == 0 {
             return;
@@ -92,8 +1071,21 @@ mod _rt {
         let layout = alloc::Layout::from_size_align_unchecked(size, align);
         alloc::dealloc(ptr, layout);
     }
+    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
+        if cfg!(debug_assertions) {
+            String::from_utf8(bytes).unwrap()
+        } else {
+            String::from_utf8_unchecked(bytes)
+        }
+    }
+    pub unsafe fn invalid_enum_discriminant<T>() -> T {
+        if cfg!(debug_assertions) {
+            panic!("invalid enum discriminant")
+        } else {
+            unsafe { core::hint::unreachable_unchecked() }
+        }
+    }
     extern crate alloc as alloc_crate;
-    pub use alloc_crate::alloc;
 }
 /// Generates `#[unsafe(no_mangle)]` functions to export the specified type as
 /// the root implementation of all generated traits.
@@ -132,12 +1124,28 @@ pub(crate) use __export_qr_data_transport_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 252] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07u\x01A\x02\x01A\x02\x01\
-B\x03\x01p}\x01@\x01\x04data\0\0\0\x04\0\x06decode\x01\x01\x04\0\x20snows:qr-dat\
-a-transport/protocol\x05\0\x04\0)snows:qr-data-transport/qr-data-transport\x04\0\
-\x0b\x17\x01\0\x11qr-data-transport\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\
-\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1019] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf3\x06\x01A\x02\x01\
+A\x02\x01B'\x01m\x02\x0auint8array\x0cbytes-string\x04\0\x09data-type\x03\0\0\x01\
+m\x02\x05ascii\x04utf8\x04\0\x0bstring-mode\x03\0\x02\x01m\x04\x01l\x01m\x01q\x01\
+h\x04\0\x0bqr-ec-level\x03\0\x04\x01k\x01\x01ky\x01r\x09\x08is-first\x7f\x07vers\
+ion}\x0etotal-qr-county\x0cframe-numbery\x09data-type\x06\x0fpayload-bit-leny\x09\
+frame-crc{\x0boverall-crc\x07\x09crc-valid\x7f\x04\0\x0eframe-metadata\x03\0\x08\
+\x01p}\x01q\x02\x05bytes\x01\x0a\0\x04text\x01s\0\x04\0\x0fdecoded-payload\x03\0\
+\x0b\x01r\x03\x0awire-bytes\x0a\x0cframe-numbery\x0etotal-qr-county\x04\0\x14enc\
+oded-frame-output\x03\0\x0d\x01p\x0e\x01r\x01\x06frames\x0f\x04\0\x0dencode-resu\
+lt\x03\0\x10\x01r\x03\x05widthy\x06heighty\x07modules\x0a\x04\0\x10qr-module-mat\
+rix\x03\0\x12\x01j\x01\x11\x01s\x01@\x02\x04data\x0a\x0emax-frame-bitsy\0\x14\x04\
+\0\x0cencode-bytes\x01\x15\x01@\x02\x04texts\x0emax-frame-bitsy\0\x14\x04\0\x0be\
+ncode-text\x01\x16\x01k{\x01j\x01\x09\x01s\x01@\x03\x0awire-bytes\x0a\x14known-t\
+otal-qr-count\x07\x15known-first-frame-crc\x17\0\x18\x04\0\x0bparse-frame\x01\x19\
+\x01p\x0a\x01j\x01\x0c\x01s\x01@\x01\x0bwire-frames\x1a\0\x1b\x04\0\x0ddecode-fr\
+ames\x01\x1c\x01j\x01\x13\x01s\x01@\x03\x0awire-bytes\x0a\x0aqr-version}\x08ec-l\
+evel\x05\0\x1d\x04\0\x12generate-qr-matrix\x01\x1e\x01j\x01\x0a\x01s\x01@\x03\x0b\
+rgba-pixels\x0a\x05widthy\x06heighty\0\x1f\x04\0\x0fdecode-qr-image\x01\x20\x04\0\
+\x20snows:qr-data-transport/protocol\x05\0\x04\0)snows:qr-data-transport/qr-data\
+-transport\x04\0\x0b\x17\x01\0\x11qr-data-transport\x03\0\0\0G\x09producers\x01\x0c\
+processed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

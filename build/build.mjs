@@ -25,4 +25,8 @@ await build({
 	external: ["node:fs/promises"],
 });
 
-await cp(resolve(wasmDir, "protocol.core.wasm"), resolve(distDir, "protocol.core.wasm"));
+const wasmFiles = ["protocol.core.wasm", "protocol.core2.wasm"];
+
+for (const file of wasmFiles) {
+	await cp(resolve(wasmDir, file), resolve(distDir, file));
+}
