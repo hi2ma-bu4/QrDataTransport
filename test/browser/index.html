@@ -73,17 +73,17 @@
 	<h1>QrDataTransport Interactive Test Page</h1>
 
 	<div class="card">
-		<h2>Configuration & Settings</h2>
+		<h2>構成と設定</h2>
 		<div>
 			<label>
-				Data Type:
+				データ型:
 				<select id="input-type">
-					<option value="string" selected>String</option>
-					<option value="file">File (Uint8Array)</option>
+					<option value="string" selected>文字列 (String)</option>
+					<option value="file">ファイル (Uint8Array)</option>
 				</select>
 			</label>
 			<label>
-				Max Frame Bits:
+				最大フレームbit数:
 				<input id="max-frame-bits" type="number" value="256" min="32">
 			</label>
 			<label>
@@ -100,11 +100,11 @@
 				</select>
 			</label>
 			<label>
-				Send Interval (ms):
+				送信間隔 (ms):
 				<input id="interval-ms" type="number" value="150" min="20">
 			</label>
 			<label>
-				Max Consecutive CRC Errors:
+				最大連続 CRC エラー:
 				<input id="max-crc-errors" type="number" value="16" min="0">
 			</label>
 		</div>
@@ -113,28 +113,28 @@
 	<div class="card">
 		<h2>Sender Controls</h2>
 		<div id="string-input-container">
-			<textarea id="input-text" rows="4">Hello QrDataTransport Spec v8!</textarea>
+			<textarea id="input-text" rows="4">Hello QrDataTransport! This is a test message.</textarea>
 		</div>
 		<div id="file-input-container" style="display: none;">
 			<input id="input-file" type="file">
 		</div>
 		<br>
-		<button id="btn-start-send" type="button">Start Sender (Render QR)</button>
-		<button id="btn-stop-send" type="button" class="stop">Stop Sender</button>
+		<button id="btn-start-send" type="button">送信開始 (Render QR)</button>
+		<button id="btn-stop-send" type="button" class="stop">送信停止</button>
 
 		<div class="canvas-container">
 			<div>
-				<h3>Sender QR Display</h3>
+				<h3>送信QR表示</h3>
 				<canvas id="qr-canvas" width="300" height="300"></canvas>
 			</div>
 		</div>
 	</div>
 
 	<div class="card">
-		<h2>Receiver Controls (Camera Scan / Self-Decode)</h2>
-		<button id="btn-start-receive" type="button">Start Receiver (Camera & Frame Processor)</button>
-		<button id="btn-stop-receive" type="button" class="stop">Stop Receiver</button>
-		<button id="btn-simulate-loopback" type="button">Simulate Direct Frame Loopback</button>
+		<h2>受信コントロール (カメラスキャン / セルフデコード)</h2>
+		<button id="btn-start-receive" type="button">受信開始 (Camera & Frame Processor)</button>
+		<button id="btn-stop-receive" type="button" class="stop">受信停止</button>
+		<button id="btn-simulate-loopback" type="button">canvas画像からのループバックのシミュレート</button>
 	</div>
 
 	<div class="card">
