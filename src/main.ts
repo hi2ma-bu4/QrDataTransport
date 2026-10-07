@@ -1,12 +1,8 @@
-import { DataApi } from "./api/dataApi.js";
-import { protocol } from "./wasm/protocol.js";
+export { protocol } from "./wasm/protocol";
 
-export { DataApi, protocol };
+export type { BrowserRuntimeApi, CameraOptions, RenderQrOptions } from "./api/browserRuntimeApi";
+export { DataApi, type DecodedResult } from "./api/dataApi";
+export { TransportApi, type ErrorCode, type ReceiveOptions, type SendOptions, type TransportError, type TransportState, type TransportWarning, type WarningCode } from "./api/transportApi";
 
-export type { DecodedResult } from "./api/dataApi.js";
-
-export type { ErrorCode, ReceiveOptions, SendOptions, TransportApi, TransportError, TransportState, TransportWarning, WarningCode } from "./api/transportApi.js";
-
-export type { BrowserRuntimeApi, CameraOptions, RenderQrOptions } from "./api/browserRuntimeApi.js";
-
-export { isWorkerContext, setupWorkerSelfListener } from "./utils/worker.js";
+export { AppConfig, BrowserRuntimeConfig, DataConfig, TransportConfig } from "./config/index";
+export { handleWorkerMessage, isWorkerContext, setupWorkerSelfListener } from "./utils/worker";

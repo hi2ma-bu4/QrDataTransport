@@ -7,7 +7,7 @@
     "esModuleInterop": true,
     "allowJs": false,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
+    "resolveJsonModule": false,
     "noEmit": true,
     "noImplicitAny": true,
     "noImplicitOverride": true,

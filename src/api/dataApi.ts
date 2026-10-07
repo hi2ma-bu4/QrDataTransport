@@ -1,5 +1,5 @@
-import type { EncodeResult, FrameMetadata, QrEcLevel, QrModuleMatrix } from "../wasm/interfaces/snows-qr-data-transport-protocol.js";
-import { protocol } from "../wasm/protocol.js";
+import type { EncodeResult, FrameMetadata, QrEcLevel, QrModuleMatrix } from "../wasm/interfaces/snows-qr-data-transport-protocol";
+import { protocol } from "../wasm/protocol";
 
 export interface DecodedResult {
 	type: "Uint8Array" | "string";

@@ -88,6 +88,29 @@ declare namespace snowsQrDataTransportProtocol_d {
   export type { snowsQrDataTransportProtocol_d_DataType as DataType, snowsQrDataTransportProtocol_d_DecodedPayload as DecodedPayload, snowsQrDataTransportProtocol_d_DecodedPayloadBytes as DecodedPayloadBytes, snowsQrDataTransportProtocol_d_DecodedPayloadText as DecodedPayloadText, snowsQrDataTransportProtocol_d_EncodeResult as EncodeResult, snowsQrDataTransportProtocol_d_EncodedFrameOutput as EncodedFrameOutput, snowsQrDataTransportProtocol_d_FrameMetadata as FrameMetadata, snowsQrDataTransportProtocol_d_QrEcLevel as QrEcLevel, snowsQrDataTransportProtocol_d_QrModuleMatrix as QrModuleMatrix, snowsQrDataTransportProtocol_d_StringMode as StringMode };
 }
 
+interface RenderQrOptions {
+    canvas?: HTMLCanvasElement | string;
+    width?: number;
+    height?: number;
+}
+interface CameraOptions {
+    deviceId?: string;
+    fps?: number;
+    width?: number;
+    height?: number;
+}
+interface BrowserRuntimeApi {
+    renderQrModuleMatrix(matrix: {
+        width: number;
+        height: number;
+        modules: Uint8Array;
+    }, options?: RenderQrOptions): void;
+    clearCanvas(canvas?: HTMLCanvasElement | string): void;
+    startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
+    stopCamera(): void;
+    isWorkerSupported(): boolean;
+}
+
 interface DecodedResult {
     type: "Uint8Array" | "string";
     data: Uint8Array | string;
@@ -120,17 +143,96 @@ declare class DataApi {
     static decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Uint8Array;
 }
 
-type TransportState = "Idle" | "WaitingForFirst" | "FirstEstablished" | "Receiving" | "WaitingMissingFrames" | "OverallCrcVerification" | "Completed" | "Error";
-interface SendOptions {
-    maxFrameBits?: number;
-    qrVersion?: number;
-    ecLevel?: "l" | "m" | "q" | "h";
-    intervalMs?: number;
-}
-interface ReceiveOptions {
+interface TransportConfigOptions {
     maxConsecutiveCrcErrors?: number;
     maxPendingFramesBeforeFirst?: number;
+    useWorker?: boolean;
+    intervalMs?: number;
 }
+declare class TransportConfig {
+    /**
+     * Maximum consecutive CRC errors before declaring a critical error.
+     * Default: 16.
+     * 0 means unlimited (disabled threshold).
+     * Values < 0 are invalid.
+     */
+    maxConsecutiveCrcErrors: number;
+    /**
+     * Maximum number of pending frame byte arrays saved before receiving First QR.
+     * Default: 32.
+     */
+    maxPendingFramesBeforeFirst: number;
+    /**
+     * Whether to use a Worker thread if available.
+     * Default: true.
+     */
+    useWorker: boolean;
+    /**
+     * Frame transmission interval in milliseconds for send mode.
+     * Default: 100ms.
+     */
+    intervalMs: number;
+    constructor(options?: TransportConfigOptions);
+    clone(): TransportConfig;
+}
+interface DataConfigOptions {
+    qrVersion?: number;
+    ecLevel?: QrEcLevel;
+    maxFrameBits?: number;
+}
+declare class DataConfig {
+    /**
+     * QR Code Version (1 ~ 40).
+     * Default: 5.
+     */
+    qrVersion: number;
+    /**
+     * QR Code Error Correction Level ('l', 'm', 'q', 'h').
+     * Default: 'm'.
+     */
+    ecLevel: QrEcLevel;
+    /**
+     * Maximum total bits per wire frame (including headers, padding, and CRC).
+     * Default: 800.
+     */
+    maxFrameBits: number;
+    constructor(options?: DataConfigOptions);
+    clone(): DataConfig;
+}
+interface BrowserRuntimeConfigOptions {
+    renderFps?: number;
+    cameraFps?: number;
+    decodeFrequency?: number;
+    qrWidth?: number;
+    qrHeight?: number;
+    canvasWidth?: number;
+    canvasHeight?: number;
+}
+declare class BrowserRuntimeConfig {
+    renderFps: number;
+    cameraFps: number;
+    decodeFrequency: number;
+    qrWidth: number;
+    qrHeight: number;
+    canvasWidth: number;
+    canvasHeight: number;
+    constructor(options?: BrowserRuntimeConfigOptions);
+    clone(): BrowserRuntimeConfig;
+}
+interface UnifiedConfigOptions {
+    transport?: TransportConfigOptions;
+    data?: DataConfigOptions;
+    browserRuntime?: BrowserRuntimeConfigOptions;
+}
+declare class AppConfig {
+    transport: TransportConfig;
+    data: DataConfig;
+    browserRuntime: BrowserRuntimeConfig;
+    constructor(options?: UnifiedConfigOptions);
+    clone(): AppConfig;
+}
+
+type TransportState = "Idle" | "WaitingForFirst" | "FirstEstablished" | "Receiving" | "WaitingMissingFrames" | "OverallCrcVerification" | "Completed" | "Error";
 type WarningCode = "FRAME_CHANGED" | "FRAME_REPLACED" | "POST_FIRST_FRAMES_DISCARDED" | "UNKNOWN_VERSION_CONTINUED";
 type ErrorCode = "INVALID_VERSION" | "UNDEFINED_DATA_TYPE" | "INVALID_TOTAL_QR_COUNT" | "SYNTAX_ERROR" | "ASCII_OUT_OF_RANGE" | "STRING_DECODE_FAILED" | "MAX_CRC_ERRORS_EXCEEDED" | "OVERALL_CRC_MISMATCH";
 interface TransportWarning {
@@ -144,61 +246,77 @@ interface TransportError {
     critical: boolean;
     details?: unknown;
 }
-interface TransportApi {
-    startSend(data: Uint8Array | string, options?: SendOptions): Promise<void>;
-    stopSend(): void;
-    startReceive(options?: ReceiveOptions): Promise<void>;
-    stopReceive(): void;
+interface SendOptions {
+    maxFrameBits?: number;
+    qrVersion?: number;
+    ecLevel?: "l" | "m" | "q" | "h";
+    intervalMs?: number;
+}
+interface ReceiveOptions {
+    maxConsecutiveCrcErrors?: number;
+    maxPendingFramesBeforeFirst?: number;
+    useWorker?: boolean;
+}
+declare class TransportApi {
+    private state;
+    private config;
+    private warningCallbacks;
+    private errorCallbacks;
+    private completeCallbacks;
+    private sendTimer;
+    private sendWireFrames;
+    private sendFrameIndex;
+    private pendingPreFirstFrames;
+    private storedFrames;
+    private knownTotalQrCount?;
+    private knownFirstFrameCrc?;
+    private consecutiveCrcErrors;
+    constructor(config?: AppConfig);
+    getConfig(): AppConfig;
     getState(): TransportState;
     onWarning(callback: (warning: TransportWarning) => void): void;
     onError(callback: (error: TransportError) => void): void;
-    onComplete(callback: (result: {
-        type: "Uint8Array" | "string";
-        data: Uint8Array | string;
-    }) => void): void;
-}
-
-interface RenderQrOptions {
-    canvas?: HTMLCanvasElement | string;
-    width?: number;
-    height?: number;
-}
-interface CameraOptions {
-    deviceId?: string;
-    fps?: number;
-    width?: number;
-    height?: number;
-}
-interface BrowserRuntimeApi {
-    renderQrModuleMatrix(matrix: {
-        width: number;
-        height: number;
-        modules: Uint8Array;
-    }, options?: RenderQrOptions): void;
-    clearCanvas(canvas?: HTMLCanvasElement | string): void;
-    startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
-    stopCamera(): void;
-    isWorkerSupported(): boolean;
+    onComplete(callback: (result: DecodedResult) => void): void;
+    private emitWarning;
+    private emitError;
+    private emitComplete;
+    startSend(data: Uint8Array | string, options?: SendOptions): Promise<void>;
+    getCurrentSendFrame(): Uint8Array | null;
+    stopSend(): void;
+    private resetSenderState;
+    startReceive(options?: ReceiveOptions): Promise<void>;
+    stopReceive(): void;
+    private resetReceiverState;
+    /**
+     * Process an incoming raw wire frame array.
+     */
+    processFrame(wireBytes: Uint8Array): void;
+    private establishFirstQr;
+    private processPostFirstFrame;
+    private handleCrcError;
+    private processPendingQueue;
+    private checkCompletion;
 }
 
 /**
  * Worker helper utilities and self-worker message handler.
- * Supports both Node.js worker_threads and Browser Web Workers.
+ * Supports Node.js worker_threads, Browser Web Workers, Module Worker, and Blob Worker fallback.
  */
 interface WorkerRequestMessage {
     id: string;
-    type: string;
-    payload: unknown;
+    type: "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText";
+    payload: any;
 }
 interface WorkerResponseMessage {
     id: string;
     type: string;
     success: boolean;
-    result?: unknown;
+    result?: any;
     error?: string;
 }
 declare function isWorkerContext(): boolean;
-declare function setupWorkerSelfListener(handler: (msg: WorkerRequestMessage) => Promise<WorkerResponseMessage> | WorkerResponseMessage): void;
+declare function handleWorkerMessage(msg: WorkerRequestMessage): Promise<WorkerResponseMessage>;
+declare function setupWorkerSelfListener(): void;
 
-export { DataApi, isWorkerContext, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener };
-export type { BrowserRuntimeApi, CameraOptions, DecodedResult, ErrorCode, ReceiveOptions, RenderQrOptions, SendOptions, TransportApi, TransportError, TransportState, TransportWarning, WarningCode };
+export { AppConfig, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, handleWorkerMessage, isWorkerContext, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener };
+export type { BrowserRuntimeApi, CameraOptions, DecodedResult, ErrorCode, ReceiveOptions, RenderQrOptions, SendOptions, TransportError, TransportState, TransportWarning, WarningCode };

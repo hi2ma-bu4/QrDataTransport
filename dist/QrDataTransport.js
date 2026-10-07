@@ -10244,6 +10244,467 @@ var DataApi = class {
   }
 };
 
+// src/config/index.ts
+var TransportConfig = class _TransportConfig {
+  /**
+   * Maximum consecutive CRC errors before declaring a critical error.
+   * Default: 16.
+   * 0 means unlimited (disabled threshold).
+   * Values < 0 are invalid.
+   */
+  maxConsecutiveCrcErrors;
+  /**
+   * Maximum number of pending frame byte arrays saved before receiving First QR.
+   * Default: 32.
+   */
+  maxPendingFramesBeforeFirst;
+  /**
+   * Whether to use a Worker thread if available.
+   * Default: true.
+   */
+  useWorker;
+  /**
+   * Frame transmission interval in milliseconds for send mode.
+   * Default: 100ms.
+   */
+  intervalMs;
+  constructor(options) {
+    const crcMax = options?.maxConsecutiveCrcErrors ?? 16;
+    if (crcMax < 0) {
+      throw new Error("maxConsecutiveCrcErrors must be non-negative");
+    }
+    this.maxConsecutiveCrcErrors = crcMax;
+    const pendingMax = options?.maxPendingFramesBeforeFirst ?? 32;
+    if (pendingMax < 0) {
+      throw new Error("maxPendingFramesBeforeFirst must be non-negative");
+    }
+    this.maxPendingFramesBeforeFirst = pendingMax;
+    this.useWorker = options?.useWorker ?? true;
+    this.intervalMs = options?.intervalMs ?? 100;
+  }
+  clone() {
+    return new _TransportConfig({
+      maxConsecutiveCrcErrors: this.maxConsecutiveCrcErrors,
+      maxPendingFramesBeforeFirst: this.maxPendingFramesBeforeFirst,
+      useWorker: this.useWorker,
+      intervalMs: this.intervalMs
+    });
+  }
+};
+var DataConfig = class _DataConfig {
+  /**
+   * QR Code Version (1 ~ 40).
+   * Default: 5.
+   */
+  qrVersion;
+  /**
+   * QR Code Error Correction Level ('l', 'm', 'q', 'h').
+   * Default: 'm'.
+   */
+  ecLevel;
+  /**
+   * Maximum total bits per wire frame (including headers, padding, and CRC).
+   * Default: 800.
+   */
+  maxFrameBits;
+  constructor(options) {
+    const ver = options?.qrVersion ?? 5;
+    if (ver < 1 || ver > 40) {
+      throw new Error("qrVersion must be between 1 and 40");
+    }
+    this.qrVersion = ver;
+    const ec = options?.ecLevel ?? "m";
+    if (!["l", "m", "q", "h"].includes(ec)) {
+      throw new Error("ecLevel must be one of 'l', 'm', 'q', 'h'");
+    }
+    this.ecLevel = ec;
+    const bits = options?.maxFrameBits ?? 800;
+    if (bits <= 0) {
+      throw new Error("maxFrameBits must be greater than 0");
+    }
+    this.maxFrameBits = bits;
+  }
+  clone() {
+    return new _DataConfig({
+      qrVersion: this.qrVersion,
+      ecLevel: this.ecLevel,
+      maxFrameBits: this.maxFrameBits
+    });
+  }
+};
+var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
+  renderFps;
+  cameraFps;
+  decodeFrequency;
+  qrWidth;
+  qrHeight;
+  canvasWidth;
+  canvasHeight;
+  constructor(options) {
+    this.renderFps = options?.renderFps ?? 10;
+    this.cameraFps = options?.cameraFps ?? 30;
+    this.decodeFrequency = options?.decodeFrequency ?? 10;
+    this.qrWidth = options?.qrWidth ?? 300;
+    this.qrHeight = options?.qrHeight ?? 300;
+    this.canvasWidth = options?.canvasWidth ?? 300;
+    this.canvasHeight = options?.canvasHeight ?? 300;
+  }
+  clone() {
+    return new _BrowserRuntimeConfig({
+      renderFps: this.renderFps,
+      cameraFps: this.cameraFps,
+      decodeFrequency: this.decodeFrequency,
+      qrWidth: this.qrWidth,
+      qrHeight: this.qrHeight,
+      canvasWidth: this.canvasWidth,
+      canvasHeight: this.canvasHeight
+    });
+  }
+};
+var AppConfig = class _AppConfig {
+  transport;
+  data;
+  browserRuntime;
+  constructor(options) {
+    this.transport = new TransportConfig(options?.transport);
+    this.data = new DataConfig(options?.data);
+    this.browserRuntime = new BrowserRuntimeConfig(options?.browserRuntime);
+  }
+  clone() {
+    return new _AppConfig({
+      transport: this.transport.clone(),
+      data: this.data.clone(),
+      browserRuntime: this.browserRuntime.clone()
+    });
+  }
+};
+
+// src/api/transportApi.ts
+var TransportApi = class {
+  state = "Idle";
+  config;
+  // Callbacks
+  warningCallbacks = [];
+  errorCallbacks = [];
+  completeCallbacks = [];
+  // Sender state
+  sendTimer = null;
+  sendWireFrames = [];
+  sendFrameIndex = 0;
+  // Receiver state
+  pendingPreFirstFrames = [];
+  storedFrames = /* @__PURE__ */ new Map();
+  knownTotalQrCount;
+  knownFirstFrameCrc;
+  consecutiveCrcErrors = 0;
+  constructor(config) {
+    this.config = config ? config.clone() : new AppConfig();
+  }
+  getConfig() {
+    return this.config;
+  }
+  getState() {
+    return this.state;
+  }
+  onWarning(callback) {
+    this.warningCallbacks.push(callback);
+  }
+  onError(callback) {
+    this.errorCallbacks.push(callback);
+  }
+  onComplete(callback) {
+    this.completeCallbacks.push(callback);
+  }
+  emitWarning(warning) {
+    for (const cb of this.warningCallbacks) {
+      cb(warning);
+    }
+  }
+  emitError(error2) {
+    if (error2.critical) {
+      this.state = "Error";
+      this.resetReceiverState();
+      this.resetSenderState();
+    }
+    for (const cb of this.errorCallbacks) {
+      cb(error2);
+    }
+  }
+  emitComplete(result) {
+    this.state = "Completed";
+    for (const cb of this.completeCallbacks) {
+      cb(result);
+    }
+  }
+  // ------------------------------------------------------------------
+  // Sender Implementation
+  // ------------------------------------------------------------------
+  async startSend(data, options) {
+    if (this.sendTimer !== null) {
+      return;
+    }
+    if (options) {
+      if (options.maxFrameBits !== void 0) {
+        this.config.data.maxFrameBits = options.maxFrameBits;
+      }
+      if (options.qrVersion !== void 0) {
+        this.config.data.qrVersion = options.qrVersion;
+      }
+      if (options.ecLevel !== void 0) {
+        this.config.data.ecLevel = options.ecLevel;
+      }
+      if (options.intervalMs !== void 0) {
+        this.config.transport.intervalMs = options.intervalMs;
+      }
+    }
+    let encodedResult;
+    try {
+      if (typeof data === "string") {
+        encodedResult = DataApi.encodeText(data, this.config.data.maxFrameBits);
+      } else {
+        encodedResult = DataApi.encodeBytes(data, this.config.data.maxFrameBits);
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.emitError({
+        code: errMsg.includes("ASCII") ? "ASCII_OUT_OF_RANGE" : "SYNTAX_ERROR",
+        message: `Encoding error: ${errMsg}`,
+        critical: true,
+        details: err
+      });
+      return;
+    }
+    this.sendWireFrames = encodedResult.frames.map((f) => new Uint8Array(f.wireBytes));
+    if (this.sendWireFrames.length === 0) {
+      this.emitError({
+        code: "SYNTAX_ERROR",
+        message: "No frames generated from payload",
+        critical: true
+      });
+      return;
+    }
+    this.sendFrameIndex = 0;
+    const interval = this.config.transport.intervalMs;
+    this.sendTimer = setInterval(() => {
+      if (this.sendWireFrames.length === 0) return;
+      this.sendFrameIndex = (this.sendFrameIndex + 1) % this.sendWireFrames.length;
+    }, interval);
+  }
+  getCurrentSendFrame() {
+    if (this.sendWireFrames.length === 0) return null;
+    return this.sendWireFrames[this.sendFrameIndex];
+  }
+  stopSend() {
+    this.resetSenderState();
+  }
+  resetSenderState() {
+    if (this.sendTimer !== null) {
+      clearInterval(this.sendTimer);
+      this.sendTimer = null;
+    }
+    this.sendWireFrames = [];
+    this.sendFrameIndex = 0;
+  }
+  // ------------------------------------------------------------------
+  // Receiver Implementation
+  // ------------------------------------------------------------------
+  async startReceive(options) {
+    if (options) {
+      if (options.maxConsecutiveCrcErrors !== void 0) {
+        this.config.transport.maxConsecutiveCrcErrors = options.maxConsecutiveCrcErrors;
+      }
+      if (options.maxPendingFramesBeforeFirst !== void 0) {
+        this.config.transport.maxPendingFramesBeforeFirst = options.maxPendingFramesBeforeFirst;
+      }
+      if (options.useWorker !== void 0) {
+        this.config.transport.useWorker = options.useWorker;
+      }
+    }
+    this.resetReceiverState();
+    this.state = "WaitingForFirst";
+  }
+  stopReceive() {
+    this.resetReceiverState();
+    this.state = "Idle";
+  }
+  resetReceiverState() {
+    this.pendingPreFirstFrames = [];
+    this.storedFrames.clear();
+    this.knownTotalQrCount = void 0;
+    this.knownFirstFrameCrc = void 0;
+    this.consecutiveCrcErrors = 0;
+  }
+  /**
+   * Process an incoming raw wire frame array.
+   */
+  processFrame(wireBytes) {
+    if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
+      return;
+    }
+    let metadata2;
+    try {
+      metadata2 = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+    } catch (err) {
+      this.emitError({
+        code: "SYNTAX_ERROR",
+        message: `Syntax error during frame parsing: ${String(err)}`,
+        critical: false
+      });
+      return;
+    }
+    if (this.knownTotalQrCount !== void 0 && metadata2.frameNumber >= this.knownTotalQrCount) {
+      return;
+    }
+    if (metadata2.isFirst && metadata2.version === 0) {
+      this.emitError({
+        code: "INVALID_VERSION",
+        message: "Library Format Version 0 is invalid",
+        critical: true
+      });
+      return;
+    }
+    if (this.state === "WaitingForFirst") {
+      if (metadata2.isFirst) {
+        if (metadata2.crcValid) {
+          this.establishFirstQr(wireBytes, metadata2);
+          this.processPendingQueue();
+        } else {
+          this.handleCrcError();
+        }
+      } else {
+        if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
+          const exists = this.pendingPreFirstFrames.some((b) => {
+            try {
+              const meta = DataApi.parseFrame(b);
+              return meta.frameNumber === metadata2.frameNumber;
+            } catch {
+              return false;
+            }
+          });
+          if (!exists) {
+            this.pendingPreFirstFrames.push(wireBytes);
+          }
+        }
+      }
+      return;
+    }
+    this.processPostFirstFrame(wireBytes, metadata2);
+  }
+  establishFirstQr(wireBytes, metadata2) {
+    this.knownTotalQrCount = metadata2.totalQrCount;
+    this.knownFirstFrameCrc = metadata2.frameCrc;
+    this.storedFrames.set(0, wireBytes);
+    this.state = metadata2.totalQrCount === 1 ? "OverallCrcVerification" : "FirstEstablished";
+    if (metadata2.totalQrCount === 1) {
+      this.checkCompletion();
+    }
+  }
+  processPostFirstFrame(wireBytes, metadata2) {
+    if (!metadata2.crcValid) {
+      this.handleCrcError();
+      return;
+    }
+    this.consecutiveCrcErrors = 0;
+    const existingWire = this.storedFrames.get(metadata2.frameNumber);
+    if (existingWire) {
+      let existingMeta;
+      try {
+        existingMeta = DataApi.parseFrame(existingWire, this.knownTotalQrCount, this.knownFirstFrameCrc);
+      } catch {
+      }
+      if (existingMeta && existingMeta.payloadBitLen === metadata2.payloadBitLen) {
+        return;
+      }
+      if (metadata2.frameNumber === 0) {
+        if (metadata2.frameCrc !== this.knownFirstFrameCrc) {
+          for (const key of Array.from(this.storedFrames.keys())) {
+            if (key !== 0) {
+              this.storedFrames.delete(key);
+            }
+          }
+          this.knownFirstFrameCrc = metadata2.frameCrc;
+          this.knownTotalQrCount = metadata2.totalQrCount;
+          this.storedFrames.set(0, wireBytes);
+          this.emitWarning({
+            code: "POST_FIRST_FRAMES_DISCARDED",
+            message: "First Frame CRC changed. Discarded subsequent stored frames."
+          });
+          this.checkCompletion();
+          return;
+        }
+      }
+      this.storedFrames.set(metadata2.frameNumber, wireBytes);
+      this.emitWarning({
+        code: "FRAME_REPLACED",
+        message: `Frame ${metadata2.frameNumber} replaced with updated payload`
+      });
+      this.checkCompletion();
+      return;
+    }
+    this.storedFrames.set(metadata2.frameNumber, wireBytes);
+    if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
+      this.state = "Receiving";
+    }
+    this.checkCompletion();
+  }
+  handleCrcError() {
+    this.consecutiveCrcErrors += 1;
+    const maxErrors = this.config.transport.maxConsecutiveCrcErrors;
+    this.emitError({
+      code: "SYNTAX_ERROR",
+      message: `Frame CRC check failed (Consecutive errors: ${this.consecutiveCrcErrors})`,
+      critical: false
+    });
+    if (maxErrors > 0 && this.consecutiveCrcErrors >= maxErrors) {
+      this.emitError({
+        code: "MAX_CRC_ERRORS_EXCEEDED",
+        message: `Consecutive CRC errors exceeded threshold (${maxErrors})`,
+        critical: true
+      });
+    }
+  }
+  processPendingQueue() {
+    const queue = [...this.pendingPreFirstFrames];
+    this.pendingPreFirstFrames = [];
+    for (const wireBytes of queue) {
+      try {
+        const metadata2 = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+        this.processPostFirstFrame(wireBytes, metadata2);
+      } catch {
+      }
+    }
+  }
+  checkCompletion() {
+    if (this.knownTotalQrCount === void 0) return;
+    if (this.storedFrames.size < this.knownTotalQrCount) {
+      this.state = "WaitingMissingFrames";
+      return;
+    }
+    for (let i = 0; i < this.knownTotalQrCount; i++) {
+      if (!this.storedFrames.has(i)) {
+        this.state = "WaitingMissingFrames";
+        return;
+      }
+    }
+    this.state = "OverallCrcVerification";
+    const orderedFrames = [];
+    for (let i = 0; i < this.knownTotalQrCount; i++) {
+      orderedFrames.push(this.storedFrames.get(i));
+    }
+    try {
+      const decoded = DataApi.decodeFrames(orderedFrames);
+      this.emitComplete(decoded);
+    } catch (err) {
+      this.emitError({
+        code: "OVERALL_CRC_MISMATCH",
+        message: `Overall CRC verification failed: ${String(err)}`,
+        critical: true,
+        details: err
+      });
+    }
+  }
+};
+
 // src/utils/worker.ts
 function isWorkerContext() {
   if (typeof self !== "undefined" && typeof window === "undefined") {
@@ -10263,7 +10724,49 @@ function isWorkerContext() {
   }
   return false;
 }
-function setupWorkerSelfListener(handler) {
+async function handleWorkerMessage(msg) {
+  try {
+    let result;
+    switch (msg.type) {
+      case "parseFrame": {
+        const { wireBytes, knownTotalQrCount, knownFirstFrameCrc } = msg.payload;
+        result = DataApi.parseFrame(new Uint8Array(wireBytes), knownTotalQrCount, knownFirstFrameCrc);
+        break;
+      }
+      case "decodeFrames": {
+        const frames = msg.payload.wireFrames.map((f) => new Uint8Array(f));
+        result = DataApi.decodeFrames(frames);
+        break;
+      }
+      case "encodeBytes": {
+        const { data, maxFrameBits } = msg.payload;
+        result = DataApi.encodeBytes(new Uint8Array(data), maxFrameBits);
+        break;
+      }
+      case "encodeText": {
+        const { text, maxFrameBits } = msg.payload;
+        result = DataApi.encodeText(text, maxFrameBits);
+        break;
+      }
+      default:
+        throw new Error(`Unknown worker request type: ${msg.type}`);
+    }
+    return {
+      id: msg.id,
+      type: msg.type,
+      success: true,
+      result
+    };
+  } catch (err) {
+    return {
+      id: msg.id,
+      type: msg.type,
+      success: false,
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
+}
+function setupWorkerSelfListener() {
   if (!isWorkerContext()) {
     return;
   }
@@ -10275,7 +10778,7 @@ function setupWorkerSelfListener(handler) {
         const workerThreads = req("node:worker_threads");
         if (workerThreads.parentPort) {
           workerThreads.parentPort.on("message", async (msg) => {
-            const res = await handler(msg);
+            const res = await handleWorkerMessage(msg);
             workerThreads.parentPort.postMessage(res);
           });
           return;
@@ -10286,13 +10789,20 @@ function setupWorkerSelfListener(handler) {
   }
   if (typeof self !== "undefined") {
     self.addEventListener("message", async (event) => {
-      const res = await handler(event.data);
+      const res = await handleWorkerMessage(event.data);
       self.postMessage(res);
     });
   }
 }
+setupWorkerSelfListener();
 export {
+  AppConfig,
+  BrowserRuntimeConfig,
   DataApi,
+  DataConfig,
+  TransportApi,
+  TransportConfig,
+  handleWorkerMessage,
   isWorkerContext,
   protocol,
   setupWorkerSelfListener
