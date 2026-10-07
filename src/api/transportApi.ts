@@ -1,5 +1,6 @@
 import { AppConfig } from "../config/index";
 import type { FrameMetadata } from "../wasm/interfaces/snows-qr-data-transport-protocol";
+import type { RenderQrOptions, RuntimeApi } from "./browserRuntimeApi";
 import { DataApi, type DecodedResult } from "./dataApi";
 
 export type TransportState = "Idle" | "WaitingForFirst" | "FirstEstablished" | "Receiving" | "WaitingMissingFrames" | "OverallCrcVerification" | "Completed" | "Error";
@@ -26,6 +27,8 @@ export interface SendOptions {
 	qrVersion?: number;
 	ecLevel?: "l" | "m" | "q" | "h";
 	intervalMs?: number;
+	canvas?: HTMLCanvasElement | string;
+	renderOptions?: RenderQrOptions;
 }
 
 export interface ReceiveOptions {
@@ -37,6 +40,7 @@ export interface ReceiveOptions {
 export class TransportApi {
 	private state: TransportState = "Idle";
 	private config: AppConfig;
+	private runtime?: RuntimeApi;
 
 	// Callbacks
 	private warningCallbacks: ((warning: TransportWarning) => void)[] = [];
@@ -47,6 +51,7 @@ export class TransportApi {
 	private sendTimer: ReturnType<typeof setInterval> | null = null;
 	private sendWireFrames: Uint8Array[] = [];
 	private sendFrameIndex = 0;
+	private sendCanvasTarget?: HTMLCanvasElement | string;
 
 	// Receiver state
 	private pendingPreFirstFrames: Uint8Array[] = [];
@@ -55,8 +60,13 @@ export class TransportApi {
 	private knownFirstFrameCrc?: number;
 	private consecutiveCrcErrors = 0;
 
-	constructor(config?: AppConfig) {
+	constructor(config?: AppConfig, runtime?: RuntimeApi) {
 		this.config = config ? config.clone() : new AppConfig();
+		this.runtime = runtime;
+	}
+
+	public setRuntime(runtime?: RuntimeApi): void {
+		this.runtime = runtime;
 	}
 
 	public getConfig(): AppConfig {
@@ -98,6 +108,9 @@ export class TransportApi {
 
 	private emitComplete(result: DecodedResult): void {
 		this.state = "Completed";
+		if (this.runtime) {
+			this.runtime.stopCamera();
+		}
 		for (const cb of this.completeCallbacks) {
 			cb(result);
 		}
@@ -108,6 +121,7 @@ export class TransportApi {
 	// ------------------------------------------------------------------
 
 	public async startSend(data: Uint8Array | string, options?: SendOptions): Promise<void> {
+		// Spec v8 Section 31, 75.1, 79: Ignore duplicate startSend calls while transmission is active
 		if (this.sendTimer !== null) {
 			return;
 		}
@@ -124,6 +138,9 @@ export class TransportApi {
 			}
 			if (options.intervalMs !== undefined) {
 				this.config.transport.intervalMs = options.intervalMs;
+			}
+			if (options.canvas !== undefined) {
+				this.sendCanvasTarget = options.canvas;
 			}
 		}
 
@@ -158,9 +175,29 @@ export class TransportApi {
 		this.sendFrameIndex = 0;
 		const interval = this.config.transport.intervalMs;
 
+		const renderCurrentFrame = () => {
+			const currentFrame = this.getCurrentSendFrame();
+			if (currentFrame && this.runtime) {
+				try {
+					const matrix = DataApi.generateQrMatrix(currentFrame, this.config.data.qrVersion, this.config.data.ecLevel);
+					this.runtime.renderQrModuleMatrix(matrix, {
+						canvas: this.sendCanvasTarget,
+						width: this.config.browserRuntime.canvasWidth,
+						height: this.config.browserRuntime.canvasHeight,
+						...options?.renderOptions,
+					});
+				} catch {
+					// Ignore render errors in headless environments
+				}
+			}
+		};
+
+		renderCurrentFrame();
+
 		this.sendTimer = setInterval(() => {
 			if (this.sendWireFrames.length === 0) return;
 			this.sendFrameIndex = (this.sendFrameIndex + 1) % this.sendWireFrames.length;
+			renderCurrentFrame();
 		}, interval);
 	}
 
@@ -178,8 +215,12 @@ export class TransportApi {
 			clearInterval(this.sendTimer);
 			this.sendTimer = null;
 		}
+		if (this.runtime) {
+			this.runtime.clearCanvas(this.sendCanvasTarget);
+		}
 		this.sendWireFrames = [];
 		this.sendFrameIndex = 0;
+		this.sendCanvasTarget = undefined;
 	}
 
 	// ------------------------------------------------------------------
@@ -187,6 +228,11 @@ export class TransportApi {
 	// ------------------------------------------------------------------
 
 	public async startReceive(options?: ReceiveOptions): Promise<void> {
+		// Spec v8 Section 75.1, 79: Ignore duplicate startReceive calls when already receiving
+		if (this.state !== "Idle" && this.state !== "Completed" && this.state !== "Error") {
+			return;
+		}
+
 		if (options) {
 			if (options.maxConsecutiveCrcErrors !== undefined) {
 				this.config.transport.maxConsecutiveCrcErrors = options.maxConsecutiveCrcErrors;
@@ -204,6 +250,9 @@ export class TransportApi {
 	}
 
 	public stopReceive(): void {
+		if (this.runtime) {
+			this.runtime.stopCamera();
+		}
 		this.resetReceiverState();
 		this.state = "Idle";
 	}
@@ -242,13 +291,22 @@ export class TransportApi {
 		}
 
 		// Version 0 check applies only to First QR (since Non-First frames have no Version field)
-		if (metadata.isFirst && metadata.version === 0) {
-			this.emitError({
-				code: "INVALID_VERSION",
-				message: "Library Format Version 0 is invalid",
-				critical: true,
-			});
-			return;
+		if (metadata.isFirst) {
+			if (metadata.version === 0) {
+				this.emitError({
+					code: "INVALID_VERSION",
+					message: "Library Format Version 0 is invalid",
+					critical: true,
+				});
+				return;
+			}
+			if (metadata.version > 1) {
+				this.emitWarning({
+					code: "UNKNOWN_VERSION_CONTINUED",
+					message: `Unknown library format version ${metadata.version}, continuing processing`,
+					details: { version: metadata.version },
+				});
+			}
 		}
 
 		if (this.state === "WaitingForFirst") {
@@ -338,6 +396,10 @@ export class TransportApi {
 			}
 
 			this.storedFrames.set(metadata.frameNumber, wireBytes);
+			this.emitWarning({
+				code: "FRAME_CHANGED",
+				message: `Frame ${metadata.frameNumber} payload length changed`,
+			});
 			this.emitWarning({
 				code: "FRAME_REPLACED",
 				message: `Frame ${metadata.frameNumber} replaced with updated payload`,

@@ -3,44 +3,145 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>QrDataTransport Browser Test</title>
+	<title>QrDataTransport Interactive Browser Test</title>
+	<style>
+		body {
+			font-family: system-ui, -apple-system, sans-serif;
+			max-width: 900px;
+			margin: 0 auto;
+			padding: 20px;
+			background-color: #f9f9f9;
+			color: #333;
+		}
+		h1 { color: #1a365d; }
+		.card {
+			background: #fff;
+			border: 1px solid #e2e8f0;
+			border-radius: 8px;
+			padding: 16px;
+			margin-bottom: 20px;
+			box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+		}
+		label {
+			display: inline-block;
+			margin-right: 15px;
+			margin-bottom: 10px;
+			font-weight: bold;
+		}
+		input[type="number"], select, textarea {
+			padding: 6px;
+			border: 1px solid #ccc;
+			border-radius: 4px;
+		}
+		textarea {
+			width: 100%;
+			box-sizing: border-box;
+		}
+		button {
+			padding: 8px 16px;
+			background: #2b6cb0;
+			color: white;
+			border: none;
+			border-radius: 4px;
+			cursor: pointer;
+			font-weight: bold;
+			margin-right: 8px;
+		}
+		button:hover { background: #2c5282; }
+		button.stop { background: #c53030; }
+		button.stop:hover { background: #9b2c2c; }
+		.canvas-container {
+			display: flex;
+			gap: 20px;
+			align-items: flex-start;
+			margin-top: 15px;
+		}
+		canvas {
+			border: 2px solid #cbd5e0;
+			background: #fff;
+		}
+		pre {
+			background: #edf2f7;
+			padding: 12px;
+			border-radius: 4px;
+			overflow-x: auto;
+			font-size: 14px;
+		}
+	</style>
 </head>
 <body>
-	<h1>QrDataTransport Browser Test</h1>
+	<h1>QrDataTransport Interactive Test Page</h1>
 
-	<section>
-		<h2>Input</h2>
-
-		<label>
-			<input type="radio" name="input-type" value="string" checked>
-			String
-		</label>
-		<label>
-			<input type="radio" name="input-type" value="file">
-			File
-		</label>
-
-		<div id="string-input">
-			<textarea id="input-text" rows="8" cols="60">hello world</textarea>
+	<div class="card">
+		<h2>Configuration & Settings</h2>
+		<div>
+			<label>
+				Data Type:
+				<select id="input-type">
+					<option value="string" selected>String</option>
+					<option value="file">File (Uint8Array)</option>
+				</select>
+			</label>
+			<label>
+				Max Frame Bits:
+				<input id="max-frame-bits" type="number" value="256" min="32">
+			</label>
+			<label>
+				QR Version (1-40):
+				<input id="qr-version" type="number" value="5" min="1" max="40">
+			</label>
+			<label>
+				EC Level:
+				<select id="ec-level">
+					<option value="l">L (7%)</option>
+					<option value="m" selected>M (15%)</option>
+					<option value="q">Q (25%)</option>
+					<option value="h">H (30%)</option>
+				</select>
+			</label>
+			<label>
+				Send Interval (ms):
+				<input id="interval-ms" type="number" value="150" min="20">
+			</label>
+			<label>
+				Max Consecutive CRC Errors:
+				<input id="max-crc-errors" type="number" value="16" min="0">
+			</label>
 		</div>
+	</div>
 
-		<div id="file-input" hidden>
+	<div class="card">
+		<h2>Sender Controls</h2>
+		<div id="string-input-container">
+			<textarea id="input-text" rows="4">Hello QrDataTransport Spec v8!</textarea>
+		</div>
+		<div id="file-input-container" style="display: none;">
 			<input id="input-file" type="file">
 		</div>
-	</section>
+		<br>
+		<button id="btn-start-send" type="button">Start Sender (Render QR)</button>
+		<button id="btn-stop-send" type="button" class="stop">Stop Sender</button>
 
-	<section>
-		<h2>Options</h2>
+		<div class="canvas-container">
+			<div>
+				<h3>Sender QR Display</h3>
+				<canvas id="qr-canvas" width="300" height="300"></canvas>
+			</div>
+		</div>
+	</div>
 
-		<label>
-			Max Frame Bits:
-			<input id="max-frame-bits" type="number" value="256" min="10">
-		</label>
-	</section>
+	<div class="card">
+		<h2>Receiver Controls (Camera Scan / Self-Decode)</h2>
+		<button id="btn-start-receive" type="button">Start Receiver (Camera & Frame Processor)</button>
+		<button id="btn-stop-receive" type="button" class="stop">Stop Receiver</button>
+		<button id="btn-simulate-loopback" type="button">Simulate Direct Frame Loopback</button>
+	</div>
 
-	<button id="test" type="button">Test</button>
-
-	<pre id="result">Ready.</pre>
+	<div class="card">
+		<h2>Status & Logs</h2>
+		<div><strong>State:</strong> <span id="status-state">Idle</span></div>
+		<pre id="log-output">Ready.</pre>
+	</div>
 
 	<script type="module" src="./main.mjs"></script>
 </body>

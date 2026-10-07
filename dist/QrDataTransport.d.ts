@@ -99,13 +99,29 @@ interface CameraOptions {
     width?: number;
     height?: number;
 }
-interface BrowserRuntimeApi {
-    renderQrModuleMatrix(matrix: {
-        width: number;
-        height: number;
-        modules: Uint8Array;
-    }, options?: RenderQrOptions): void;
+interface QrModuleMatrixData {
+    width: number;
+    height: number;
+    modules: Uint8Array;
+}
+/**
+ * Runtime API interface for display rendering and camera operations.
+ * Allows TransportApi to remain runtime-agnostic.
+ */
+interface RuntimeApi {
+    renderQrModuleMatrix(matrix: QrModuleMatrixData, options?: RenderQrOptions): void;
     clearCanvas(canvas?: HTMLCanvasElement | string): void;
+    startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
+    stopCamera(): void;
+    isWorkerSupported(): boolean;
+}
+declare class BrowserRuntimeApi implements RuntimeApi {
+    private cameraStream;
+    private cameraVideo;
+    private cameraAnimationId;
+    private resolveCanvas;
+    renderQrModuleMatrix(matrix: QrModuleMatrixData, options?: RenderQrOptions): void;
+    clearCanvas(canvasTarget?: HTMLCanvasElement | string): void;
     startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
     stopCamera(): void;
     isWorkerSupported(): boolean;
@@ -251,6 +267,8 @@ interface SendOptions {
     qrVersion?: number;
     ecLevel?: "l" | "m" | "q" | "h";
     intervalMs?: number;
+    canvas?: HTMLCanvasElement | string;
+    renderOptions?: RenderQrOptions;
 }
 interface ReceiveOptions {
     maxConsecutiveCrcErrors?: number;
@@ -260,18 +278,21 @@ interface ReceiveOptions {
 declare class TransportApi {
     private state;
     private config;
+    private runtime?;
     private warningCallbacks;
     private errorCallbacks;
     private completeCallbacks;
     private sendTimer;
     private sendWireFrames;
     private sendFrameIndex;
+    private sendCanvasTarget?;
     private pendingPreFirstFrames;
     private storedFrames;
     private knownTotalQrCount?;
     private knownFirstFrameCrc?;
     private consecutiveCrcErrors;
-    constructor(config?: AppConfig);
+    constructor(config?: AppConfig, runtime?: RuntimeApi);
+    setRuntime(runtime?: RuntimeApi): void;
     getConfig(): AppConfig;
     getState(): TransportState;
     onWarning(callback: (warning: TransportWarning) => void): void;
@@ -318,5 +339,5 @@ declare function isWorkerContext(): boolean;
 declare function handleWorkerMessage(msg: WorkerRequestMessage): Promise<WorkerResponseMessage>;
 declare function setupWorkerSelfListener(): void;
 
-export { AppConfig, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, handleWorkerMessage, isWorkerContext, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener };
-export type { BrowserRuntimeApi, CameraOptions, DecodedResult, ErrorCode, ReceiveOptions, RenderQrOptions, SendOptions, TransportError, TransportState, TransportWarning, WarningCode };
+export { AppConfig, BrowserRuntimeApi, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, handleWorkerMessage, isWorkerContext, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener };
+export type { CameraOptions, DecodedResult, ErrorCode, ReceiveOptions, RenderQrOptions, RuntimeApi, SendOptions, TransportError, TransportState, TransportWarning, WarningCode };

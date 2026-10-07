@@ -10176,6 +10176,134 @@ var protocol = {
   parseFrame
 };
 
+// src/api/browserRuntimeApi.ts
+var BrowserRuntimeApi = class {
+  cameraStream = null;
+  cameraVideo = null;
+  cameraAnimationId = null;
+  resolveCanvas(canvasTarget) {
+    if (typeof document === "undefined") {
+      return null;
+    }
+    if (!canvasTarget) {
+      return document.querySelector("canvas");
+    }
+    if (typeof canvasTarget === "string") {
+      const el = document.getElementById(canvasTarget);
+      if (el && el instanceof HTMLCanvasElement) {
+        return el;
+      }
+      return document.querySelector(canvasTarget);
+    }
+    if (canvasTarget instanceof HTMLCanvasElement) {
+      return canvasTarget;
+    }
+    return null;
+  }
+  renderQrModuleMatrix(matrix, options) {
+    const canvas = this.resolveCanvas(options?.canvas);
+    if (!canvas) {
+      return;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return;
+    }
+    const canvasWidth = options?.width ?? canvas.width ?? 300;
+    const canvasHeight = options?.height ?? canvas.height ?? 300;
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const { width, height, modules } = matrix;
+    if (width <= 0 || height <= 0 || modules.length < width * height) {
+      return;
+    }
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    const moduleWidth = canvasWidth / width;
+    const moduleHeight = canvasHeight / height;
+    ctx.fillStyle = "#000000";
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (modules[y * width + x] === 1) {
+          ctx.fillRect(x * moduleWidth, y * moduleHeight, moduleWidth, moduleHeight);
+        }
+      }
+    }
+  }
+  clearCanvas(canvasTarget) {
+    const canvas = this.resolveCanvas(canvasTarget);
+    if (!canvas) {
+      return;
+    }
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+  async startCamera(onFrame, options) {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("Camera API (navigator.mediaDevices.getUserMedia) is not available in this environment");
+    }
+    this.stopCamera();
+    const constraints = {
+      video: {
+        deviceId: options?.deviceId ? { exact: options.deviceId } : void 0,
+        width: options?.width ? { ideal: options.width } : void 0,
+        height: options?.height ? { ideal: options.height } : void 0
+      }
+    };
+    this.cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+    this.cameraVideo = document.createElement("video");
+    this.cameraVideo.srcObject = this.cameraStream;
+    this.cameraVideo.setAttribute("playsinline", "true");
+    await this.cameraVideo.play();
+    const offscreenCanvas = document.createElement("canvas");
+    const offscreenCtx = offscreenCanvas.getContext("2d", { willReadFrequently: true });
+    const fps = options?.fps && options.fps > 0 ? options.fps : 30;
+    const intervalMs = 1e3 / fps;
+    let lastFrameTime = 0;
+    const captureLoop = (now2) => {
+      if (!this.cameraVideo || !this.cameraStream) {
+        return;
+      }
+      if (now2 - lastFrameTime >= intervalMs) {
+        lastFrameTime = now2;
+        const vWidth = this.cameraVideo.videoWidth;
+        const vHeight = this.cameraVideo.videoHeight;
+        if (vWidth > 0 && vHeight > 0 && offscreenCtx) {
+          offscreenCanvas.width = vWidth;
+          offscreenCanvas.height = vHeight;
+          offscreenCtx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
+          const imgData = offscreenCtx.getImageData(0, 0, vWidth, vHeight);
+          onFrame(new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength), vWidth, vHeight);
+        }
+      }
+      this.cameraAnimationId = requestAnimationFrame(captureLoop);
+    };
+    this.cameraAnimationId = requestAnimationFrame(captureLoop);
+  }
+  stopCamera() {
+    if (this.cameraAnimationId !== null && typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(this.cameraAnimationId);
+      this.cameraAnimationId = null;
+    }
+    if (this.cameraStream) {
+      for (const track of this.cameraStream.getTracks()) {
+        track.stop();
+      }
+      this.cameraStream = null;
+    }
+    if (this.cameraVideo) {
+      this.cameraVideo.pause();
+      this.cameraVideo.srcObject = null;
+      this.cameraVideo = null;
+    }
+  }
+  isWorkerSupported() {
+    return typeof Worker !== "undefined";
+  }
+};
+
 // src/api/dataApi.ts
 function ensureSharedUint8Array(arr) {
   if (!arr) {
@@ -10383,6 +10511,7 @@ var AppConfig = class _AppConfig {
 var TransportApi = class {
   state = "Idle";
   config;
+  runtime;
   // Callbacks
   warningCallbacks = [];
   errorCallbacks = [];
@@ -10391,14 +10520,19 @@ var TransportApi = class {
   sendTimer = null;
   sendWireFrames = [];
   sendFrameIndex = 0;
+  sendCanvasTarget;
   // Receiver state
   pendingPreFirstFrames = [];
   storedFrames = /* @__PURE__ */ new Map();
   knownTotalQrCount;
   knownFirstFrameCrc;
   consecutiveCrcErrors = 0;
-  constructor(config) {
+  constructor(config, runtime) {
     this.config = config ? config.clone() : new AppConfig();
+    this.runtime = runtime;
+  }
+  setRuntime(runtime) {
+    this.runtime = runtime;
   }
   getConfig() {
     return this.config;
@@ -10432,6 +10566,9 @@ var TransportApi = class {
   }
   emitComplete(result) {
     this.state = "Completed";
+    if (this.runtime) {
+      this.runtime.stopCamera();
+    }
     for (const cb of this.completeCallbacks) {
       cb(result);
     }
@@ -10455,6 +10592,9 @@ var TransportApi = class {
       }
       if (options.intervalMs !== void 0) {
         this.config.transport.intervalMs = options.intervalMs;
+      }
+      if (options.canvas !== void 0) {
+        this.sendCanvasTarget = options.canvas;
       }
     }
     let encodedResult;
@@ -10485,9 +10625,26 @@ var TransportApi = class {
     }
     this.sendFrameIndex = 0;
     const interval = this.config.transport.intervalMs;
+    const renderCurrentFrame = () => {
+      const currentFrame = this.getCurrentSendFrame();
+      if (currentFrame && this.runtime) {
+        try {
+          const matrix = DataApi.generateQrMatrix(currentFrame, this.config.data.qrVersion, this.config.data.ecLevel);
+          this.runtime.renderQrModuleMatrix(matrix, {
+            canvas: this.sendCanvasTarget,
+            width: this.config.browserRuntime.canvasWidth,
+            height: this.config.browserRuntime.canvasHeight,
+            ...options?.renderOptions
+          });
+        } catch {
+        }
+      }
+    };
+    renderCurrentFrame();
     this.sendTimer = setInterval(() => {
       if (this.sendWireFrames.length === 0) return;
       this.sendFrameIndex = (this.sendFrameIndex + 1) % this.sendWireFrames.length;
+      renderCurrentFrame();
     }, interval);
   }
   getCurrentSendFrame() {
@@ -10502,13 +10659,20 @@ var TransportApi = class {
       clearInterval(this.sendTimer);
       this.sendTimer = null;
     }
+    if (this.runtime) {
+      this.runtime.clearCanvas(this.sendCanvasTarget);
+    }
     this.sendWireFrames = [];
     this.sendFrameIndex = 0;
+    this.sendCanvasTarget = void 0;
   }
   // ------------------------------------------------------------------
   // Receiver Implementation
   // ------------------------------------------------------------------
   async startReceive(options) {
+    if (this.state !== "Idle" && this.state !== "Completed" && this.state !== "Error") {
+      return;
+    }
     if (options) {
       if (options.maxConsecutiveCrcErrors !== void 0) {
         this.config.transport.maxConsecutiveCrcErrors = options.maxConsecutiveCrcErrors;
@@ -10524,6 +10688,9 @@ var TransportApi = class {
     this.state = "WaitingForFirst";
   }
   stopReceive() {
+    if (this.runtime) {
+      this.runtime.stopCamera();
+    }
     this.resetReceiverState();
     this.state = "Idle";
   }
@@ -10555,13 +10722,22 @@ var TransportApi = class {
     if (this.knownTotalQrCount !== void 0 && metadata2.frameNumber >= this.knownTotalQrCount) {
       return;
     }
-    if (metadata2.isFirst && metadata2.version === 0) {
-      this.emitError({
-        code: "INVALID_VERSION",
-        message: "Library Format Version 0 is invalid",
-        critical: true
-      });
-      return;
+    if (metadata2.isFirst) {
+      if (metadata2.version === 0) {
+        this.emitError({
+          code: "INVALID_VERSION",
+          message: "Library Format Version 0 is invalid",
+          critical: true
+        });
+        return;
+      }
+      if (metadata2.version > 1) {
+        this.emitWarning({
+          code: "UNKNOWN_VERSION_CONTINUED",
+          message: `Unknown library format version ${metadata2.version}, continuing processing`,
+          details: { version: metadata2.version }
+        });
+      }
     }
     if (this.state === "WaitingForFirst") {
       if (metadata2.isFirst) {
@@ -10634,6 +10810,10 @@ var TransportApi = class {
         }
       }
       this.storedFrames.set(metadata2.frameNumber, wireBytes);
+      this.emitWarning({
+        code: "FRAME_CHANGED",
+        message: `Frame ${metadata2.frameNumber} payload length changed`
+      });
       this.emitWarning({
         code: "FRAME_REPLACED",
         message: `Frame ${metadata2.frameNumber} replaced with updated payload`
@@ -10797,6 +10977,7 @@ function setupWorkerSelfListener() {
 setupWorkerSelfListener();
 export {
   AppConfig,
+  BrowserRuntimeApi,
   BrowserRuntimeConfig,
   DataApi,
   DataConfig,
