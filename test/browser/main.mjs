@@ -1,9 +1,9 @@
 import { BrowserRuntimeApi, TransportApi } from "../../dist/QrDataTransport.js";
 
 const inputTypeSelect = document.getElementById("input-type");
-const maxFrameBitsInput = document.getElementById("max-frame-bits");
 const qrVersionInput = document.getElementById("qr-version");
 const ecLevelSelect = document.getElementById("ec-level");
+const calcMaxFrameBitsSpan = document.getElementById("calc-max-frame-bits");
 const intervalMsInput = document.getElementById("interval-ms");
 const maxCrcErrorsInput = document.getElementById("max-crc-errors");
 
@@ -23,6 +23,22 @@ const logOutput = document.getElementById("log-output");
 
 const runtime = new BrowserRuntimeApi();
 const transport = new TransportApi(undefined, runtime);
+
+function updateCalculatedCapacity() {
+	const ver = Number(qrVersionInput.value);
+	const ec = ecLevelSelect.value;
+	try {
+		const config = transport.getConfig();
+		config.data.qrVersion = ver;
+		config.data.ecLevel = ec;
+		calcMaxFrameBitsSpan.textContent = `${config.data.maxFrameBits} bits`;
+	} catch {
+		calcMaxFrameBitsSpan.textContent = "Error";
+	}
+}
+
+qrVersionInput.addEventListener("input", updateCalculatedCapacity);
+ecLevelSelect.addEventListener("change", updateCalculatedCapacity);
 
 inputTypeSelect.addEventListener("change", () => {
 	if (inputTypeSelect.value === "string") {
@@ -55,7 +71,6 @@ transport.onComplete((res) => {
 btnStartSend.addEventListener("click", async () => {
 	try {
 		const inputType = inputTypeSelect.value;
-		const maxFrameBits = Number(maxFrameBitsInput.value);
 		const qrVersion = Number(qrVersionInput.value);
 		const ecLevel = ecLevelSelect.value;
 		const intervalMs = Number(intervalMsInput.value);
@@ -73,7 +88,6 @@ btnStartSend.addEventListener("click", async () => {
 		}
 
 		await transport.startSend(payload, {
-			maxFrameBits,
 			qrVersion,
 			ecLevel,
 			intervalMs,
@@ -136,3 +150,5 @@ btnSimulateLoopback.addEventListener("click", async () => {
 		log(`Loopback error: ${String(err)}`);
 	}
 });
+
+updateCalculatedCapacity();

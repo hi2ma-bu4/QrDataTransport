@@ -134,12 +134,14 @@ interface DecodedResult {
 declare class DataApi {
     /**
      * Encodes raw bytes into wire frames using WASM protocol core.
+     * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
      */
-    static encodeBytes(data: Uint8Array, maxFrameBits: number): EncodeResult;
+    static encodeBytes(data: Uint8Array, qrVersion?: number, ecLevel?: QrEcLevel): EncodeResult;
     /**
      * Encodes text into wire frames using WASM protocol core.
+     * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
      */
-    static encodeText(text: string, maxFrameBits: number): EncodeResult;
+    static encodeText(text: string, qrVersion?: number, ecLevel?: QrEcLevel): EncodeResult;
     /**
      * Parses a single wire frame and verifies its CRC.
      */
@@ -194,7 +196,6 @@ declare class TransportConfig {
 interface DataConfigOptions {
     qrVersion?: number;
     ecLevel?: QrEcLevel;
-    maxFrameBits?: number;
 }
 declare class DataConfig {
     /**
@@ -207,12 +208,11 @@ declare class DataConfig {
      * Default: 'm'.
      */
     ecLevel: QrEcLevel;
-    /**
-     * Maximum total bits per wire frame (including headers, padding, and CRC).
-     * Default: 800.
-     */
-    maxFrameBits: number;
     constructor(options?: DataConfigOptions);
+    /**
+     * Maximum total bits per wire frame calculated automatically from qrVersion and ecLevel.
+     */
+    get maxFrameBits(): number;
     clone(): DataConfig;
 }
 interface BrowserRuntimeConfigOptions {
@@ -263,7 +263,6 @@ interface TransportError {
     details?: unknown;
 }
 interface SendOptions {
-    maxFrameBits?: number;
     qrVersion?: number;
     ecLevel?: "l" | "m" | "q" | "h";
     intervalMs?: number;
@@ -308,11 +307,13 @@ declare class TransportApi {
     startReceive(options?: ReceiveOptions): Promise<void>;
     stopReceive(): void;
     private resetReceiverState;
+    getPendingPreFirstQueueLength(): number;
     /**
      * Process an incoming raw wire frame array.
      */
     processFrame(wireBytes: Uint8Array): void;
     private establishFirstQr;
+    private removeSupersededPendingFrames;
     private processPostFirstFrame;
     private handleCrcError;
     private processPendingQueue;

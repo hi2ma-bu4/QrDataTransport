@@ -23,7 +23,6 @@ export interface TransportError {
 }
 
 export interface SendOptions {
-	maxFrameBits?: number;
 	qrVersion?: number;
 	ecLevel?: "l" | "m" | "q" | "h";
 	intervalMs?: number;
@@ -127,9 +126,6 @@ export class TransportApi {
 		}
 
 		if (options) {
-			if (options.maxFrameBits !== undefined) {
-				this.config.data.maxFrameBits = options.maxFrameBits;
-			}
 			if (options.qrVersion !== undefined) {
 				this.config.data.qrVersion = options.qrVersion;
 			}
@@ -147,9 +143,9 @@ export class TransportApi {
 		let encodedResult;
 		try {
 			if (typeof data === "string") {
-				encodedResult = DataApi.encodeText(data, this.config.data.maxFrameBits);
+				encodedResult = DataApi.encodeText(data, this.config.data.qrVersion, this.config.data.ecLevel);
 			} else {
-				encodedResult = DataApi.encodeBytes(data, this.config.data.maxFrameBits);
+				encodedResult = DataApi.encodeBytes(data, this.config.data.qrVersion, this.config.data.ecLevel);
 			}
 		} catch (err) {
 			const errMsg = err instanceof Error ? err.message : String(err);
@@ -265,12 +261,32 @@ export class TransportApi {
 		this.consecutiveCrcErrors = 0;
 	}
 
+	public getPendingPreFirstQueueLength(): number {
+		return this.pendingPreFirstFrames.length;
+	}
+
 	/**
 	 * Process an incoming raw wire frame array.
 	 */
 	public processFrame(wireBytes: Uint8Array): void {
-		if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
+		if (this.state === "Idle" || this.state === "Completed" || this.state === "Error" || wireBytes.length === 0) {
 			return;
+		}
+
+		// Spec v8 Section 11 & 32: Start bit is 1 for First QR, 0 for Non-First
+		const isStartBitSet = (wireBytes[0] & 0x80) !== 0;
+
+		if (this.state === "WaitingForFirst") {
+			if (!isStartBitSet) {
+				// Spec v8 Section 32, 33, 34: Non-first frame arriving before First QR -> queue temporarily without parsing or CRC error
+				if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
+					const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
+					if (!isDuplicate) {
+						this.pendingPreFirstFrames.push(wireBytes);
+					}
+				}
+				return;
+			}
 		}
 
 		let metadata: FrameMetadata;
@@ -318,21 +334,6 @@ export class TransportApi {
 					// Corrupted First QR -> count CRC error
 					this.handleCrcError();
 				}
-			} else {
-				// Non-first frame arriving before First QR -> queue for later (does NOT count for CRC error)
-				if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
-					const exists = this.pendingPreFirstFrames.some((b) => {
-						try {
-							const meta = DataApi.parseFrame(b);
-							return meta.frameNumber === metadata.frameNumber;
-						} catch {
-							return false;
-						}
-					});
-					if (!exists) {
-						this.pendingPreFirstFrames.push(wireBytes);
-					}
-				}
 			}
 			return;
 		}
@@ -351,6 +352,18 @@ export class TransportApi {
 		}
 	}
 
+	private removeSupersededPendingFrames(frameNumber: number): void {
+		if (this.pendingPreFirstFrames.length === 0) return;
+		this.pendingPreFirstFrames = this.pendingPreFirstFrames.filter((wire) => {
+			try {
+				const meta = DataApi.parseFrame(wire, this.knownTotalQrCount, this.knownFirstFrameCrc);
+				return meta.frameNumber !== frameNumber;
+			} catch {
+				return false;
+			}
+		});
+	}
+
 	private processPostFirstFrame(wireBytes: Uint8Array, metadata: FrameMetadata): void {
 		if (!metadata.crcValid) {
 			this.handleCrcError();
@@ -359,6 +372,9 @@ export class TransportApi {
 
 		// CRC is VALID! Reset consecutive error count
 		this.consecutiveCrcErrors = 0;
+
+		// Spec v8 Section 35: Remove superseded pre-first queued items for this frame number
+		this.removeSupersededPendingFrames(metadata.frameNumber);
 
 		const existingWire = this.storedFrames.get(metadata.frameNumber);
 		if (existingWire) {
@@ -369,30 +385,28 @@ export class TransportApi {
 				// ignore
 			}
 
-			if (existingMeta && existingMeta.payloadBitLen === metadata.payloadBitLen) {
-				// Frame Number and Payload Length match existing -> Skip!
+			// Spec v8 Section 38, 39, 60: If First QR (Frame 0) arrives with a different First CRC, update communication reference and discard subsequent frames!
+			if (metadata.frameNumber === 0 && metadata.frameCrc !== this.knownFirstFrameCrc) {
+				for (const key of Array.from(this.storedFrames.keys())) {
+					if (key !== 0) {
+						this.storedFrames.delete(key);
+					}
+				}
+				this.knownFirstFrameCrc = metadata.frameCrc;
+				this.knownTotalQrCount = metadata.totalQrCount;
+				this.storedFrames.set(0, wireBytes);
+
+				this.emitWarning({
+					code: "POST_FIRST_FRAMES_DISCARDED",
+					message: "First Frame CRC changed. Discarded subsequent stored frames.",
+				});
+				this.checkCompletion();
 				return;
 			}
 
-			// Spec v8 Section 39 & 60: If First QR (Frame 0) modified, check First CRC change!
-			if (metadata.frameNumber === 0) {
-				if (metadata.frameCrc !== this.knownFirstFrameCrc) {
-					for (const key of Array.from(this.storedFrames.keys())) {
-						if (key !== 0) {
-							this.storedFrames.delete(key);
-						}
-					}
-					this.knownFirstFrameCrc = metadata.frameCrc;
-					this.knownTotalQrCount = metadata.totalQrCount;
-					this.storedFrames.set(0, wireBytes);
-
-					this.emitWarning({
-						code: "POST_FIRST_FRAMES_DISCARDED",
-						message: "First Frame CRC changed. Discarded subsequent stored frames.",
-					});
-					this.checkCompletion();
-					return;
-				}
+			if (existingMeta && existingMeta.payloadBitLen === metadata.payloadBitLen) {
+				// Frame Number and Payload Length match existing -> Skip!
+				return;
 			}
 
 			this.storedFrames.set(metadata.frameNumber, wireBytes);
@@ -438,12 +452,16 @@ export class TransportApi {
 	}
 
 	private processPendingQueue(): void {
+		if (this.pendingPreFirstFrames.length === 0) return;
 		const queue = [...this.pendingPreFirstFrames];
 		this.pendingPreFirstFrames = [];
 
 		for (const wireBytes of queue) {
 			try {
 				const metadata = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+				if (this.storedFrames.has(metadata.frameNumber)) {
+					continue;
+				}
 				this.processPostFirstFrame(wireBytes, metadata);
 			} catch {
 				// ignore invalid pending frame

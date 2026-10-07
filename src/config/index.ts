@@ -1,3 +1,4 @@
+import { calculateMaxFrameBits } from "../utils/qrCapacity";
 import type { QrEcLevel } from "../wasm/interfaces/snows-qr-data-transport-protocol";
 
 export interface TransportConfigOptions {
@@ -64,7 +65,6 @@ export class TransportConfig {
 export interface DataConfigOptions {
 	qrVersion?: number;
 	ecLevel?: QrEcLevel;
-	maxFrameBits?: number;
 }
 
 export class DataConfig {
@@ -80,12 +80,6 @@ export class DataConfig {
 	 */
 	public ecLevel: QrEcLevel;
 
-	/**
-	 * Maximum total bits per wire frame (including headers, padding, and CRC).
-	 * Default: 800.
-	 */
-	public maxFrameBits: number;
-
 	constructor(options?: DataConfigOptions) {
 		const ver = options?.qrVersion ?? 5;
 		if (ver < 1 || ver > 40) {
@@ -98,19 +92,19 @@ export class DataConfig {
 			throw new Error("ecLevel must be one of 'l', 'm', 'q', 'h'");
 		}
 		this.ecLevel = ec;
+	}
 
-		const bits = options?.maxFrameBits ?? 800;
-		if (bits <= 0) {
-			throw new Error("maxFrameBits must be greater than 0");
-		}
-		this.maxFrameBits = bits;
+	/**
+	 * Maximum total bits per wire frame calculated automatically from qrVersion and ecLevel.
+	 */
+	public get maxFrameBits(): number {
+		return calculateMaxFrameBits(this.qrVersion, this.ecLevel);
 	}
 
 	public clone(): DataConfig {
 		return new DataConfig({
 			qrVersion: this.qrVersion,
 			ecLevel: this.ecLevel,
-			maxFrameBits: this.maxFrameBits,
 		});
 	}
 }

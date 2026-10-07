@@ -67,6 +67,10 @@
 			overflow-x: auto;
 			font-size: 14px;
 		}
+		.calculated-info {
+			color: #2b6cb0;
+			font-weight: bold;
+		}
 	</style>
 </head>
 <body>
@@ -83,10 +87,6 @@
 				</select>
 			</label>
 			<label>
-				最大フレームbit数:
-				<input id="max-frame-bits" type="number" value="256" min="32">
-			</label>
-			<label>
 				QR Version (1-40):
 				<input id="qr-version" type="number" value="5" min="1" max="40">
 			</label>
@@ -99,6 +99,11 @@
 					<option value="h">H (30%)</option>
 				</select>
 			</label>
+			<label>
+				自動計算フレームbit容量:
+				<span id="calc-max-frame-bits" class="calculated-info">688 bits</span>
+			</label>
+			<br>
 			<label>
 				送信間隔 (ms):
 				<input id="interval-ms" type="number" value="150" min="20">

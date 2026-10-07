@@ -10304,6 +10304,54 @@ var BrowserRuntimeApi = class {
   }
 };
 
+// src/utils/qrCapacity.ts
+var ECC_CODEWORDS_PER_BLOCK = [
+  [0, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
+  [0, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28],
+  [0, 13, 22, 18, 26, 18, 24, 18, 22, 20, 24, 28, 26, 24, 20, 30, 24, 28, 28, 26, 30, 28, 30, 30, 30, 30, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
+  [0, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28, 22, 24, 24, 30, 28, 28, 26, 28, 30, 24, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30]
+];
+var NUM_ERROR_CORRECTION_BLOCKS = [
+  [0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 24, 25],
+  [0, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49],
+  [0, 1, 1, 2, 2, 4, 4, 6, 6, 8, 8, 8, 10, 12, 16, 12, 17, 16, 18, 21, 20, 23, 23, 25, 27, 29, 34, 34, 35, 38, 40, 43, 45, 48, 51, 53, 56, 59, 62, 65, 68],
+  [0, 1, 1, 2, 4, 4, 4, 5, 6, 8, 8, 11, 11, 16, 16, 18, 16, 19, 21, 25, 25, 25, 34, 30, 32, 35, 37, 40, 42, 45, 48, 51, 54, 57, 60, 63, 66, 70, 74, 77, 81]
+];
+function calculateMaxFrameBits(qrVersion, ecLevel) {
+  if (qrVersion < 1 || qrVersion > 40) {
+    throw new Error("qrVersion must be between 1 and 40");
+  }
+  const version = Math.floor(qrVersion);
+  let rawDataModules = (16 * version + 128) * version + 64;
+  if (version >= 2) {
+    const numAlign = Math.floor(version / 7) + 2;
+    rawDataModules -= (25 * numAlign - 10) * numAlign - 55;
+    if (version >= 7) {
+      rawDataModules -= 36;
+    }
+  }
+  let ecIndex = 1;
+  switch (ecLevel) {
+    case "l":
+      ecIndex = 0;
+      break;
+    case "m":
+      ecIndex = 1;
+      break;
+    case "q":
+      ecIndex = 2;
+      break;
+    case "h":
+      ecIndex = 3;
+      break;
+  }
+  const rawCodewords = Math.floor(rawDataModules / 8);
+  const eccCodewords = ECC_CODEWORDS_PER_BLOCK[ecIndex][version];
+  const numBlocks = NUM_ERROR_CORRECTION_BLOCKS[ecIndex][version];
+  const dataCodewords = rawCodewords - eccCodewords * numBlocks;
+  return dataCodewords * 8;
+}
+
 // src/api/dataApi.ts
 function ensureSharedUint8Array(arr) {
   if (!arr) {
@@ -10317,15 +10365,19 @@ function ensureSharedUint8Array(arr) {
 var DataApi = class {
   /**
    * Encodes raw bytes into wire frames using WASM protocol core.
+   * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
    */
-  static encodeBytes(data, maxFrameBits) {
+  static encodeBytes(data, qrVersion = 5, ecLevel = "m") {
     const bytes = ensureSharedUint8Array(data);
+    const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
     return protocol.encodeBytes(bytes, maxFrameBits);
   }
   /**
    * Encodes text into wire frames using WASM protocol core.
+   * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
    */
-  static encodeText(text, maxFrameBits) {
+  static encodeText(text, qrVersion = 5, ecLevel = "m") {
+    const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
     return protocol.encodeText(text, maxFrameBits);
   }
   /**
@@ -10430,11 +10482,6 @@ var DataConfig = class _DataConfig {
    * Default: 'm'.
    */
   ecLevel;
-  /**
-   * Maximum total bits per wire frame (including headers, padding, and CRC).
-   * Default: 800.
-   */
-  maxFrameBits;
   constructor(options) {
     const ver = options?.qrVersion ?? 5;
     if (ver < 1 || ver > 40) {
@@ -10446,17 +10493,17 @@ var DataConfig = class _DataConfig {
       throw new Error("ecLevel must be one of 'l', 'm', 'q', 'h'");
     }
     this.ecLevel = ec;
-    const bits = options?.maxFrameBits ?? 800;
-    if (bits <= 0) {
-      throw new Error("maxFrameBits must be greater than 0");
-    }
-    this.maxFrameBits = bits;
+  }
+  /**
+   * Maximum total bits per wire frame calculated automatically from qrVersion and ecLevel.
+   */
+  get maxFrameBits() {
+    return calculateMaxFrameBits(this.qrVersion, this.ecLevel);
   }
   clone() {
     return new _DataConfig({
       qrVersion: this.qrVersion,
-      ecLevel: this.ecLevel,
-      maxFrameBits: this.maxFrameBits
+      ecLevel: this.ecLevel
     });
   }
 };
@@ -10581,9 +10628,6 @@ var TransportApi = class {
       return;
     }
     if (options) {
-      if (options.maxFrameBits !== void 0) {
-        this.config.data.maxFrameBits = options.maxFrameBits;
-      }
       if (options.qrVersion !== void 0) {
         this.config.data.qrVersion = options.qrVersion;
       }
@@ -10600,9 +10644,9 @@ var TransportApi = class {
     let encodedResult;
     try {
       if (typeof data === "string") {
-        encodedResult = DataApi.encodeText(data, this.config.data.maxFrameBits);
+        encodedResult = DataApi.encodeText(data, this.config.data.qrVersion, this.config.data.ecLevel);
       } else {
-        encodedResult = DataApi.encodeBytes(data, this.config.data.maxFrameBits);
+        encodedResult = DataApi.encodeBytes(data, this.config.data.qrVersion, this.config.data.ecLevel);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -10701,12 +10745,27 @@ var TransportApi = class {
     this.knownFirstFrameCrc = void 0;
     this.consecutiveCrcErrors = 0;
   }
+  getPendingPreFirstQueueLength() {
+    return this.pendingPreFirstFrames.length;
+  }
   /**
    * Process an incoming raw wire frame array.
    */
   processFrame(wireBytes) {
-    if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
+    if (this.state === "Idle" || this.state === "Completed" || this.state === "Error" || wireBytes.length === 0) {
       return;
+    }
+    const isStartBitSet = (wireBytes[0] & 128) !== 0;
+    if (this.state === "WaitingForFirst") {
+      if (!isStartBitSet) {
+        if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
+          const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
+          if (!isDuplicate) {
+            this.pendingPreFirstFrames.push(wireBytes);
+          }
+        }
+        return;
+      }
     }
     let metadata2;
     try {
@@ -10747,20 +10806,6 @@ var TransportApi = class {
         } else {
           this.handleCrcError();
         }
-      } else {
-        if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
-          const exists = this.pendingPreFirstFrames.some((b) => {
-            try {
-              const meta = DataApi.parseFrame(b);
-              return meta.frameNumber === metadata2.frameNumber;
-            } catch {
-              return false;
-            }
-          });
-          if (!exists) {
-            this.pendingPreFirstFrames.push(wireBytes);
-          }
-        }
       }
       return;
     }
@@ -10775,12 +10820,24 @@ var TransportApi = class {
       this.checkCompletion();
     }
   }
+  removeSupersededPendingFrames(frameNumber) {
+    if (this.pendingPreFirstFrames.length === 0) return;
+    this.pendingPreFirstFrames = this.pendingPreFirstFrames.filter((wire) => {
+      try {
+        const meta = DataApi.parseFrame(wire, this.knownTotalQrCount, this.knownFirstFrameCrc);
+        return meta.frameNumber !== frameNumber;
+      } catch {
+        return false;
+      }
+    });
+  }
   processPostFirstFrame(wireBytes, metadata2) {
     if (!metadata2.crcValid) {
       this.handleCrcError();
       return;
     }
     this.consecutiveCrcErrors = 0;
+    this.removeSupersededPendingFrames(metadata2.frameNumber);
     const existingWire = this.storedFrames.get(metadata2.frameNumber);
     if (existingWire) {
       let existingMeta;
@@ -10788,26 +10845,24 @@ var TransportApi = class {
         existingMeta = DataApi.parseFrame(existingWire, this.knownTotalQrCount, this.knownFirstFrameCrc);
       } catch {
       }
-      if (existingMeta && existingMeta.payloadBitLen === metadata2.payloadBitLen) {
+      if (metadata2.frameNumber === 0 && metadata2.frameCrc !== this.knownFirstFrameCrc) {
+        for (const key of Array.from(this.storedFrames.keys())) {
+          if (key !== 0) {
+            this.storedFrames.delete(key);
+          }
+        }
+        this.knownFirstFrameCrc = metadata2.frameCrc;
+        this.knownTotalQrCount = metadata2.totalQrCount;
+        this.storedFrames.set(0, wireBytes);
+        this.emitWarning({
+          code: "POST_FIRST_FRAMES_DISCARDED",
+          message: "First Frame CRC changed. Discarded subsequent stored frames."
+        });
+        this.checkCompletion();
         return;
       }
-      if (metadata2.frameNumber === 0) {
-        if (metadata2.frameCrc !== this.knownFirstFrameCrc) {
-          for (const key of Array.from(this.storedFrames.keys())) {
-            if (key !== 0) {
-              this.storedFrames.delete(key);
-            }
-          }
-          this.knownFirstFrameCrc = metadata2.frameCrc;
-          this.knownTotalQrCount = metadata2.totalQrCount;
-          this.storedFrames.set(0, wireBytes);
-          this.emitWarning({
-            code: "POST_FIRST_FRAMES_DISCARDED",
-            message: "First Frame CRC changed. Discarded subsequent stored frames."
-          });
-          this.checkCompletion();
-          return;
-        }
+      if (existingMeta && existingMeta.payloadBitLen === metadata2.payloadBitLen) {
+        return;
       }
       this.storedFrames.set(metadata2.frameNumber, wireBytes);
       this.emitWarning({
@@ -10844,11 +10899,15 @@ var TransportApi = class {
     }
   }
   processPendingQueue() {
+    if (this.pendingPreFirstFrames.length === 0) return;
     const queue = [...this.pendingPreFirstFrames];
     this.pendingPreFirstFrames = [];
     for (const wireBytes of queue) {
       try {
         const metadata2 = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+        if (this.storedFrames.has(metadata2.frameNumber)) {
+          continue;
+        }
         this.processPostFirstFrame(wireBytes, metadata2);
       } catch {
       }

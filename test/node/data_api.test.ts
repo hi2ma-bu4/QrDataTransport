@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DataApi } from "../../dist/QrDataTransport.js";
+import { DataApi } from "../../dist/QrDataTransport";
 
 test("DataApi memory sharing test with non-zero byteOffset TypedArray view", () => {
 	const parentBuffer = new Uint8Array([0, 0, 10, 20, 30, 40, 0, 0]);
@@ -40,5 +40,5 @@ test("DataApi returns discriminated type object for String vs Uint8Array", () =>
 	const bytesDecoded = DataApi.decodeFrames(bytesRes.frames.map((f) => f.wireBytes));
 	assert.strictEqual(bytesDecoded.type, "Uint8Array");
 	assert.ok(bytesDecoded.data instanceof Uint8Array);
-	assert.deepStrictEqual(Array.from(bytesDecoded.data), [1, 2, 3]);
+	assert.deepStrictEqual(Array.from(bytesDecoded.data as Uint8Array), [1, 2, 3]);
 });

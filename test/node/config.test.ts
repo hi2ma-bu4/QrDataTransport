@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { AppConfig, BrowserRuntimeConfig, DataConfig, TransportConfig } from "../../src/config/index.js";
+import { calculateMaxFrameBits } from "../../src/utils/qrCapacity";
 
 test("TransportConfig default values", () => {
 	const config = new TransportConfig();
@@ -22,7 +23,7 @@ test("DataConfig default values and boundary checks", () => {
 	const config = new DataConfig();
 	assert.equal(config.qrVersion, 5);
 	assert.equal(config.ecLevel, "m");
-	assert.equal(config.maxFrameBits, 800);
+	assert.equal(config.maxFrameBits, calculateMaxFrameBits(5, "m"));
 
 	assert.throws(() => new DataConfig({ qrVersion: 0 }), /qrVersion/);
 	assert.throws(() => new DataConfig({ qrVersion: 41 }), /qrVersion/);
@@ -31,7 +32,6 @@ test("DataConfig default values and boundary checks", () => {
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	assert.throws(() => new DataConfig({ ecLevel: "x" as any }), /ecLevel/);
-	assert.throws(() => new DataConfig({ maxFrameBits: 0 }), /maxFrameBits/);
 });
 
 test("BrowserRuntimeConfig default values", () => {

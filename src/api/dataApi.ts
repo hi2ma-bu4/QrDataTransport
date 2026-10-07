@@ -1,3 +1,4 @@
+import { calculateMaxFrameBits } from "../utils/qrCapacity";
 import type { EncodeResult, FrameMetadata, QrEcLevel, QrModuleMatrix } from "../wasm/interfaces/snows-qr-data-transport-protocol";
 import { protocol } from "../wasm/protocol";
 
@@ -21,16 +22,20 @@ function ensureSharedUint8Array(arr: Uint8Array): Uint8Array {
 export class DataApi {
 	/**
 	 * Encodes raw bytes into wire frames using WASM protocol core.
+	 * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
 	 */
-	static encodeBytes(data: Uint8Array, maxFrameBits: number): EncodeResult {
+	static encodeBytes(data: Uint8Array, qrVersion: number = 5, ecLevel: QrEcLevel = "m"): EncodeResult {
 		const bytes = ensureSharedUint8Array(data);
+		const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
 		return protocol.encodeBytes(bytes, maxFrameBits);
 	}
 
 	/**
 	 * Encodes text into wire frames using WASM protocol core.
+	 * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
 	 */
-	static encodeText(text: string, maxFrameBits: number): EncodeResult {
+	static encodeText(text: string, qrVersion: number = 5, ecLevel: QrEcLevel = "m"): EncodeResult {
+		const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
 		return protocol.encodeText(text, maxFrameBits);
 	}
 
