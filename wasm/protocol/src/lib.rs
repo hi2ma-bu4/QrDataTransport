@@ -6,6 +6,7 @@ pub mod crc;
 pub mod decoder;
 pub mod encoder;
 pub mod frame;
+pub mod qr_capacity;
 pub mod varint;
 
 use bindings::exports::snows::qr_data_transport::protocol::{
