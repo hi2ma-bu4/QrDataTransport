@@ -3,82 +3,18 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>QrDataTransport Interactive Browser Test</title>
-	<style>
-		body {
-			font-family: system-ui, -apple-system, sans-serif;
-			max-width: 900px;
-			margin: 0 auto;
-			padding: 20px;
-			background-color: #f9f9f9;
-			color: #333;
-		}
-		h1 { color: #1a365d; }
-		.card {
-			background: #fff;
-			border: 1px solid #e2e8f0;
-			border-radius: 8px;
-			padding: 16px;
-			margin-bottom: 20px;
-			box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-		}
-		label {
-			display: inline-block;
-			margin-right: 15px;
-			margin-bottom: 10px;
-			font-weight: bold;
-		}
-		input[type="number"], select, textarea {
-			padding: 6px;
-			border: 1px solid #ccc;
-			border-radius: 4px;
-		}
-		textarea {
-			width: 100%;
-			box-sizing: border-box;
-		}
-		button {
-			padding: 8px 16px;
-			background: #2b6cb0;
-			color: white;
-			border: none;
-			border-radius: 4px;
-			cursor: pointer;
-			font-weight: bold;
-			margin-right: 8px;
-		}
-		button:hover { background: #2c5282; }
-		button.stop { background: #c53030; }
-		button.stop:hover { background: #9b2c2c; }
-		.canvas-container {
-			display: flex;
-			gap: 20px;
-			align-items: flex-start;
-			margin-top: 15px;
-		}
-		canvas {
-			border: 2px solid #cbd5e0;
-			background: #fff;
-		}
-		pre {
-			background: #edf2f7;
-			padding: 12px;
-			border-radius: 4px;
-			overflow-x: auto;
-			font-size: 14px;
-		}
-		.calculated-info {
-			color: #2b6cb0;
-			font-weight: bold;
-		}
-	</style>
+	<title>QrDataTransport Interactive Test Page</title>
+	<link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-	<h1>QrDataTransport Interactive Test Page</h1>
+	<header>
+		<h1>QrDataTransport テスト</h1>
+	</header>
 
-	<div class="card">
-		<h2>構成と設定</h2>
-		<div>
+	<!-- 折りたたみ設定 UI -->
+	<details class="settings-card" open>
+		<summary>⚙️ 通信設定</summary>
+		<div class="settings-grid">
 			<label>
 				データ型:
 				<select id="input-type">
@@ -103,7 +39,6 @@
 				自動計算フレームbit容量:
 				<span id="calc-max-frame-bits" class="calculated-info">688 bits</span>
 			</label>
-			<br>
 			<label>
 				送信間隔 (ms):
 				<input id="interval-ms" type="number" value="150" min="20">
@@ -113,38 +48,64 @@
 				<input id="max-crc-errors" type="number" value="16" min="0">
 			</label>
 		</div>
-	</div>
+	</details>
 
-	<div class="card">
-		<h2>Sender Controls</h2>
-		<div id="string-input-container">
-			<textarea id="input-text" rows="4">Hello QrDataTransport! This is a test message.</textarea>
-		</div>
-		<div id="file-input-container" style="display: none;">
-			<input id="input-file" type="file">
-		</div>
-		<br>
-		<button id="btn-start-send" type="button">送信開始 (Render QR)</button>
-		<button id="btn-stop-send" type="button" class="stop">送信停止</button>
+	<!-- モード切り替えタブ -->
+	<nav class="mode-tabs">
+		<button id="tab-sender" type="button" class="tab-btn active">📤 送信 (Sender) モード</button>
+		<button id="tab-receiver" type="button" class="tab-btn">📥 受信 (Receiver) モード</button>
+	</nav>
 
-		<div class="canvas-container">
-			<div>
-				<h3>送信QR表示</h3>
-				<canvas id="qr-canvas" width="300" height="300"></canvas>
+	<!-- 送信モード パネル -->
+	<div id="panel-sender" class="tab-content active">
+		<div class="card">
+			<h2>送信コントロール</h2>
+			<div id="string-input-container">
+				<textarea id="input-text" rows="3">Hello QrDataTransport! This is a test message.</textarea>
+			</div>
+			<div id="file-input-container" style="display: none;">
+				<input id="input-file" type="file">
+			</div>
+
+			<div class="btn-group">
+				<button id="btn-start-send" type="button">送信開始 (Render QR)</button>
+				<button id="btn-stop-send" type="button" class="stop">送信停止</button>
+			</div>
+
+			<div class="canvas-wrapper">
+				<h3>送信QRコード表示</h3>
+				<canvas id="qr-canvas" width="280" height="280"></canvas>
 			</div>
 		</div>
 	</div>
 
-	<div class="card">
-		<h2>受信コントロール (カメラスキャン / セルフデコード)</h2>
-		<button id="btn-start-receive" type="button">受信開始 (Camera & Frame Processor)</button>
-		<button id="btn-stop-receive" type="button" class="stop">受信停止</button>
-		<button id="btn-simulate-loopback" type="button">canvas画像からのループバックのシミュレート</button>
+	<!-- 受信モード パネル -->
+	<div id="panel-receiver" class="tab-content">
+		<div class="card">
+			<h2>
+				<span>受信コントロール</span>
+				<!-- 受信進捗 UI: (a(b)/c) -->
+				<span id="progress-display" class="progress-display" title="(現在正常QR数(待機QR数)/要求QR数)">(0/N)</span>
+			</h2>
+
+			<div class="btn-group">
+				<button id="btn-start-receive" type="button">受信開始 (Camera Scan)</button>
+				<button id="btn-stop-receive" type="button" class="stop">受信停止</button>
+				<button id="btn-simulate-loopback" type="button" class="secondary">Sender Canvasループバック</button>
+			</div>
+
+			<div class="canvas-wrapper">
+				<h3>カメラ映像 & スキャンオーバーレイ</h3>
+				<canvas id="camera-canvas" width="300" height="300"></canvas>
+			</div>
+		</div>
 	</div>
 
-	<div class="card">
-		<h2>Status & Logs</h2>
-		<div><strong>State:</strong> <span id="status-state">Idle</span></div>
+	<!-- ステータス & ログ (共通) -->
+	<div class="card" style="margin-top: 12px;">
+		<div class="status-bar">
+			<div><strong>State:</strong> <span id="status-state">Idle</span></div>
+		</div>
 		<pre id="log-output">Ready.</pre>
 	</div>
 

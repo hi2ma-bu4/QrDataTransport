@@ -98,6 +98,8 @@ interface CameraOptions {
     fps?: number;
     width?: number;
     height?: number;
+    previewCanvas?: HTMLCanvasElement | string;
+    drawOverlay?: (ctx: CanvasRenderingContext2D, width: number, height: number) => void;
 }
 interface QrModuleMatrixData {
     width: number;
@@ -123,6 +125,7 @@ declare class BrowserRuntimeApi implements RuntimeApi {
     renderQrModuleMatrix(matrix: QrModuleMatrixData, options?: RenderQrOptions): void;
     clearCanvas(canvasTarget?: HTMLCanvasElement | string): void;
     startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
+    private drawDefaultScanOverlay;
     stopCamera(): void;
     isWorkerSupported(): boolean;
 }
@@ -274,6 +277,11 @@ interface ReceiveOptions {
     maxPendingFramesBeforeFirst?: number;
     useWorker?: boolean;
 }
+interface FrameProcessedEvent {
+    validCount: number;
+    pendingCount: number;
+    totalCount: number;
+}
 declare class TransportApi {
     private state;
     private config;
@@ -281,6 +289,7 @@ declare class TransportApi {
     private warningCallbacks;
     private errorCallbacks;
     private completeCallbacks;
+    private frameProcessedCallbacks;
     private sendTimer;
     private sendWireFrames;
     private sendFrameIndex;
@@ -297,6 +306,8 @@ declare class TransportApi {
     onWarning(callback: (warning: TransportWarning) => void): void;
     onError(callback: (error: TransportError) => void): void;
     onComplete(callback: (result: DecodedResult) => void): void;
+    onFrameProcessed(callback: (event: FrameProcessedEvent) => void): void;
+    private emitFrameProcessed;
     private emitWarning;
     private emitError;
     private emitComplete;

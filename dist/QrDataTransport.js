@@ -10275,12 +10275,66 @@ var BrowserRuntimeApi = class {
           offscreenCanvas.height = vHeight;
           offscreenCtx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
           const imgData = offscreenCtx.getImageData(0, 0, vWidth, vHeight);
+          if (options?.previewCanvas) {
+            const pCanvas = this.resolveCanvas(options.previewCanvas);
+            if (pCanvas) {
+              const pCtx = pCanvas.getContext("2d");
+              if (pCtx) {
+                if (pCanvas.width !== vWidth) pCanvas.width = vWidth;
+                if (pCanvas.height !== vHeight) pCanvas.height = vHeight;
+                pCtx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
+                this.drawDefaultScanOverlay(pCtx, vWidth, vHeight);
+                if (options.drawOverlay) {
+                  options.drawOverlay(pCtx, vWidth, vHeight);
+                }
+              }
+            }
+          }
           onFrame(new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength), vWidth, vHeight);
         }
       }
       this.cameraAnimationId = requestAnimationFrame(captureLoop);
     };
     this.cameraAnimationId = requestAnimationFrame(captureLoop);
+  }
+  drawDefaultScanOverlay(ctx, width, height) {
+    const size = Math.min(width, height) * 0.65;
+    const x = (width - size) / 2;
+    const y = (height - size) / 2;
+    ctx.save();
+    ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+    ctx.fillRect(0, 0, width, height);
+    ctx.clearRect(x, y, size, size);
+    if (this.cameraVideo) {
+      ctx.drawImage(this.cameraVideo, x, y, size, size, x, y, size, size);
+    }
+    ctx.strokeStyle = "#10b981";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, size, size);
+    const lineLen = Math.min(size * 0.15, 24);
+    ctx.strokeStyle = "#34d399";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(x, y + lineLen);
+    ctx.lineTo(x, y);
+    ctx.lineTo(x + lineLen, y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + size - lineLen, y);
+    ctx.lineTo(x + size, y);
+    ctx.lineTo(x + size, y + lineLen);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x, y + size - lineLen);
+    ctx.lineTo(x, y + size);
+    ctx.lineTo(x + lineLen, y + size);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + size - lineLen, y + size);
+    ctx.lineTo(x + size, y + size);
+    ctx.lineTo(x + size, y + size - lineLen);
+    ctx.stroke();
+    ctx.restore();
   }
   stopCamera() {
     if (this.cameraAnimationId !== null && typeof cancelAnimationFrame !== "undefined") {
@@ -10565,6 +10619,7 @@ var TransportApi = class {
   warningCallbacks = [];
   errorCallbacks = [];
   completeCallbacks = [];
+  frameProcessedCallbacks = [];
   // Sender state
   sendTimer = null;
   sendWireFrames = [];
@@ -10597,6 +10652,24 @@ var TransportApi = class {
   }
   onComplete(callback) {
     this.completeCallbacks.push(callback);
+  }
+  onFrameProcessed(callback) {
+    this.frameProcessedCallbacks.push(callback);
+    callback({
+      validCount: this.storedFrames.size,
+      pendingCount: this.pendingPreFirstFrames.length,
+      totalCount: this.knownTotalQrCount ?? -1
+    });
+  }
+  emitFrameProcessed() {
+    const event = {
+      validCount: this.storedFrames.size,
+      pendingCount: this.pendingPreFirstFrames.length,
+      totalCount: this.knownTotalQrCount ?? -1
+    };
+    for (const cb of this.frameProcessedCallbacks) {
+      cb(event);
+    }
   }
   emitWarning(warning) {
     for (const cb of this.warningCallbacks) {
@@ -10732,6 +10805,7 @@ var TransportApi = class {
     }
     this.resetReceiverState();
     this.state = "WaitingForFirst";
+    this.emitFrameProcessed();
   }
   stopReceive() {
     if (this.runtime) {
@@ -10746,6 +10820,7 @@ var TransportApi = class {
     this.knownTotalQrCount = void 0;
     this.knownFirstFrameCrc = void 0;
     this.consecutiveCrcErrors = 0;
+    this.emitFrameProcessed();
   }
   getPendingPreFirstQueueLength() {
     return this.pendingPreFirstFrames.length;
@@ -10757,61 +10832,65 @@ var TransportApi = class {
     if (this.state === "Idle" || this.state === "Completed" || this.state === "Error" || wireBytes.length === 0) {
       return;
     }
-    const isStartBitSet = (wireBytes[0] & 128) !== 0;
-    if (this.state === "WaitingForFirst") {
-      if (!isStartBitSet) {
-        if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
-          const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
-          if (!isDuplicate) {
-            this.pendingPreFirstFrames.push(wireBytes);
+    try {
+      const isStartBitSet = (wireBytes[0] & 128) !== 0;
+      if (this.state === "WaitingForFirst") {
+        if (!isStartBitSet) {
+          if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
+            const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
+            if (!isDuplicate) {
+              this.pendingPreFirstFrames.push(wireBytes);
+            }
+          }
+          return;
+        }
+      }
+      let metadata2;
+      try {
+        metadata2 = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+      } catch (err) {
+        this.emitError({
+          code: "SYNTAX_ERROR",
+          message: `Syntax error during frame parsing: ${String(err)}`,
+          critical: false
+        });
+        return;
+      }
+      if (this.knownTotalQrCount !== void 0 && metadata2.frameNumber >= this.knownTotalQrCount) {
+        return;
+      }
+      if (metadata2.isFirst) {
+        if (metadata2.version === 0) {
+          this.emitError({
+            code: "INVALID_VERSION",
+            message: "Library Format Version 0 is invalid",
+            critical: true
+          });
+          return;
+        }
+        if (metadata2.version > 1) {
+          this.emitWarning({
+            code: "UNKNOWN_VERSION_CONTINUED",
+            message: `Unknown library format version ${metadata2.version}, continuing processing`,
+            details: { version: metadata2.version }
+          });
+        }
+      }
+      if (this.state === "WaitingForFirst") {
+        if (metadata2.isFirst) {
+          if (metadata2.crcValid) {
+            this.establishFirstQr(wireBytes, metadata2);
+            this.processPendingQueue();
+          } else {
+            this.handleCrcError();
           }
         }
         return;
       }
+      this.processPostFirstFrame(wireBytes, metadata2);
+    } finally {
+      this.emitFrameProcessed();
     }
-    let metadata2;
-    try {
-      metadata2 = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
-    } catch (err) {
-      this.emitError({
-        code: "SYNTAX_ERROR",
-        message: `Syntax error during frame parsing: ${String(err)}`,
-        critical: false
-      });
-      return;
-    }
-    if (this.knownTotalQrCount !== void 0 && metadata2.frameNumber >= this.knownTotalQrCount) {
-      return;
-    }
-    if (metadata2.isFirst) {
-      if (metadata2.version === 0) {
-        this.emitError({
-          code: "INVALID_VERSION",
-          message: "Library Format Version 0 is invalid",
-          critical: true
-        });
-        return;
-      }
-      if (metadata2.version > 1) {
-        this.emitWarning({
-          code: "UNKNOWN_VERSION_CONTINUED",
-          message: `Unknown library format version ${metadata2.version}, continuing processing`,
-          details: { version: metadata2.version }
-        });
-      }
-    }
-    if (this.state === "WaitingForFirst") {
-      if (metadata2.isFirst) {
-        if (metadata2.crcValid) {
-          this.establishFirstQr(wireBytes, metadata2);
-          this.processPendingQueue();
-        } else {
-          this.handleCrcError();
-        }
-      }
-      return;
-    }
-    this.processPostFirstFrame(wireBytes, metadata2);
   }
   establishFirstQr(wireBytes, metadata2) {
     this.knownTotalQrCount = metadata2.totalQrCount;

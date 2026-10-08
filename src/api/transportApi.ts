@@ -36,6 +36,12 @@ export interface ReceiveOptions {
 	useWorker?: boolean;
 }
 
+export interface FrameProcessedEvent {
+	validCount: number;
+	pendingCount: number;
+	totalCount: number;
+}
+
 export class TransportApi {
 	private state: TransportState = "Idle";
 	private config: AppConfig;
@@ -45,6 +51,7 @@ export class TransportApi {
 	private warningCallbacks: ((warning: TransportWarning) => void)[] = [];
 	private errorCallbacks: ((error: TransportError) => void)[] = [];
 	private completeCallbacks: ((result: DecodedResult) => void)[] = [];
+	private frameProcessedCallbacks: ((event: FrameProcessedEvent) => void)[] = [];
 
 	// Sender state
 	private sendTimer: ReturnType<typeof setInterval> | null = null;
@@ -86,6 +93,27 @@ export class TransportApi {
 
 	public onComplete(callback: (result: DecodedResult) => void): void {
 		this.completeCallbacks.push(callback);
+	}
+
+	public onFrameProcessed(callback: (event: FrameProcessedEvent) => void): void {
+		this.frameProcessedCallbacks.push(callback);
+		// Emit initial status when subscribing
+		callback({
+			validCount: this.storedFrames.size,
+			pendingCount: this.pendingPreFirstFrames.length,
+			totalCount: this.knownTotalQrCount ?? -1,
+		});
+	}
+
+	private emitFrameProcessed(): void {
+		const event: FrameProcessedEvent = {
+			validCount: this.storedFrames.size,
+			pendingCount: this.pendingPreFirstFrames.length,
+			totalCount: this.knownTotalQrCount ?? -1,
+		};
+		for (const cb of this.frameProcessedCallbacks) {
+			cb(event);
+		}
 	}
 
 	private emitWarning(warning: TransportWarning): void {
@@ -243,6 +271,7 @@ export class TransportApi {
 
 		this.resetReceiverState();
 		this.state = "WaitingForFirst";
+		this.emitFrameProcessed();
 	}
 
 	public stopReceive(): void {
@@ -259,6 +288,7 @@ export class TransportApi {
 		this.knownTotalQrCount = undefined;
 		this.knownFirstFrameCrc = undefined;
 		this.consecutiveCrcErrors = 0;
+		this.emitFrameProcessed();
 	}
 
 	public getPendingPreFirstQueueLength(): number {
@@ -273,72 +303,76 @@ export class TransportApi {
 			return;
 		}
 
-		// Spec v8 Section 11 & 32: Start bit is 1 for First QR, 0 for Non-First
-		const isStartBitSet = (wireBytes[0] & 0x80) !== 0;
+		try {
+			// Spec v8 Section 11 & 32: Start bit is 1 for First QR, 0 for Non-First
+			const isStartBitSet = (wireBytes[0] & 0x80) !== 0;
 
-		if (this.state === "WaitingForFirst") {
-			if (!isStartBitSet) {
-				// Spec v8 Section 32, 33, 34: Non-first frame arriving before First QR -> queue temporarily without parsing or CRC error
-				if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
-					const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
-					if (!isDuplicate) {
-						this.pendingPreFirstFrames.push(wireBytes);
+			if (this.state === "WaitingForFirst") {
+				if (!isStartBitSet) {
+					// Spec v8 Section 32, 33, 34: Non-first frame arriving before First QR -> queue temporarily without parsing or CRC error
+					if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
+						const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
+						if (!isDuplicate) {
+							this.pendingPreFirstFrames.push(wireBytes);
+						}
+					}
+					return;
+				}
+			}
+
+			let metadata: FrameMetadata;
+			try {
+				metadata = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+			} catch (err) {
+				this.emitError({
+					code: "SYNTAX_ERROR",
+					message: `Syntax error during frame parsing: ${String(err)}`,
+					critical: false,
+				});
+				return;
+			}
+
+			// Spec v8 Section 41: Out-of-range frame number -> ignore
+			if (this.knownTotalQrCount !== undefined && metadata.frameNumber >= this.knownTotalQrCount) {
+				return;
+			}
+
+			// Version 0 check applies only to First QR (since Non-First frames have no Version field)
+			if (metadata.isFirst) {
+				if (metadata.version === 0) {
+					this.emitError({
+						code: "INVALID_VERSION",
+						message: "Library Format Version 0 is invalid",
+						critical: true,
+					});
+					return;
+				}
+				if (metadata.version > 1) {
+					this.emitWarning({
+						code: "UNKNOWN_VERSION_CONTINUED",
+						message: `Unknown library format version ${metadata.version}, continuing processing`,
+						details: { version: metadata.version },
+					});
+				}
+			}
+
+			if (this.state === "WaitingForFirst") {
+				if (metadata.isFirst) {
+					if (metadata.crcValid) {
+						this.establishFirstQr(wireBytes, metadata);
+						this.processPendingQueue();
+					} else {
+						// Corrupted First QR -> count CRC error
+						this.handleCrcError();
 					}
 				}
 				return;
 			}
-		}
 
-		let metadata: FrameMetadata;
-		try {
-			metadata = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
-		} catch (err) {
-			this.emitError({
-				code: "SYNTAX_ERROR",
-				message: `Syntax error during frame parsing: ${String(err)}`,
-				critical: false,
-			});
-			return;
+			this.processPostFirstFrame(wireBytes, metadata);
+		} finally {
+			this.emitFrameProcessed();
 		}
-
-		// Spec v8 Section 41: Out-of-range frame number -> ignore
-		if (this.knownTotalQrCount !== undefined && metadata.frameNumber >= this.knownTotalQrCount) {
-			return;
-		}
-
-		// Version 0 check applies only to First QR (since Non-First frames have no Version field)
-		if (metadata.isFirst) {
-			if (metadata.version === 0) {
-				this.emitError({
-					code: "INVALID_VERSION",
-					message: "Library Format Version 0 is invalid",
-					critical: true,
-				});
-				return;
-			}
-			if (metadata.version > 1) {
-				this.emitWarning({
-					code: "UNKNOWN_VERSION_CONTINUED",
-					message: `Unknown library format version ${metadata.version}, continuing processing`,
-					details: { version: metadata.version },
-				});
-			}
-		}
-
-		if (this.state === "WaitingForFirst") {
-			if (metadata.isFirst) {
-				if (metadata.crcValid) {
-					this.establishFirstQr(wireBytes, metadata);
-					this.processPendingQueue();
-				} else {
-					// Corrupted First QR -> count CRC error
-					this.handleCrcError();
-				}
-			}
-			return;
-		}
-
-		this.processPostFirstFrame(wireBytes, metadata);
 	}
 
 	private establishFirstQr(wireBytes: Uint8Array, metadata: FrameMetadata): void {

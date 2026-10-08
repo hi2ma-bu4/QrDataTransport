@@ -1,4 +1,4 @@
-import { BrowserRuntimeApi, TransportApi } from "../../dist/QrDataTransport.js";
+import { BrowserRuntimeApi, DataApi, TransportApi } from "../../dist/QrDataTransport.js";
 
 const inputTypeSelect = document.getElementById("input-type");
 const qrVersionInput = document.getElementById("qr-version");
@@ -20,9 +20,30 @@ const btnSimulateLoopback = document.getElementById("btn-simulate-loopback");
 
 const statusState = document.getElementById("status-state");
 const logOutput = document.getElementById("log-output");
+const progressDisplay = document.getElementById("progress-display");
+
+const tabSender = document.getElementById("tab-sender");
+const tabReceiver = document.getElementById("tab-receiver");
+const panelSender = document.getElementById("panel-sender");
+const panelReceiver = document.getElementById("panel-receiver");
 
 const runtime = new BrowserRuntimeApi();
 const transport = new TransportApi(undefined, runtime);
+
+// Tab Switching
+tabSender.addEventListener("click", () => {
+	tabSender.classList.add("active");
+	tabReceiver.classList.remove("active");
+	panelSender.classList.add("active");
+	panelReceiver.classList.remove("active");
+});
+
+tabReceiver.addEventListener("click", () => {
+	tabReceiver.classList.add("active");
+	tabSender.classList.remove("active");
+	panelReceiver.classList.add("active");
+	panelSender.classList.remove("active");
+});
 
 function updateCalculatedCapacity() {
 	const ver = Number(qrVersionInput.value);
@@ -68,6 +89,14 @@ transport.onComplete((res) => {
 	log(`[COMPLETE] Received Data (${res.type}): ${typeof res.data === "string" ? res.data : `Uint8Array(${res.data.length} bytes)`}`);
 });
 
+transport.onFrameProcessed((evt) => {
+	if (progressDisplay) {
+		const totalStr = evt.totalCount === -1 ? "N" : evt.totalCount;
+		const pendingStr = evt.pendingCount <= 0 ? "" : `(${evt.pendingCount})`;
+		progressDisplay.textContent = `(${evt.validCount}${pendingStr}/${totalStr})`;
+	}
+});
+
 btnStartSend.addEventListener("click", async () => {
 	try {
 		const inputType = inputTypeSelect.value;
@@ -110,14 +139,19 @@ btnStartReceive.addEventListener("click", async () => {
 		const maxConsecutiveCrcErrors = Number(maxCrcErrorsInput.value);
 		await transport.startReceive({ maxConsecutiveCrcErrors });
 
-		await runtime.startCamera((rgbaPixels, width, height) => {
-			// Dynamic frame decode processing loop using WASM
-			try {
-				const wireBytes = transport.getConfig() ? null : null; // Camera decode hook placeholder
-			} catch {
-				// ignore invalid camera frame decode
-			}
-		});
+		await runtime.startCamera(
+			(rgbaPixels, width, height) => {
+				try {
+					const wireBytes = DataApi.decodeQrImage(rgbaPixels, width, height);
+					if (wireBytes && wireBytes.length > 0) {
+						transport.processFrame(wireBytes);
+					}
+				} catch {
+					// Ignore frames where QR code is not found or decode fails
+				}
+			},
+			{ previewCanvas: "camera-canvas" },
+		);
 
 		log("Started receiver and camera feed.");
 	} catch (err) {

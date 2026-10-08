@@ -247,3 +247,44 @@ test("TransportApi Receiver: Out-of-range frame numbers are ignored", async () =
 	transport.processFrame(f5);
 	assert.equal(errorFired, false);
 });
+
+test("TransportApi Receiver: onFrameProcessed emits progress events with (validCount, pendingCount, totalCount)", async () => {
+	const transport = new TransportApi();
+
+	const progressEvents: { validCount: number; pendingCount: number; totalCount: number }[] = [];
+	transport.onFrameProcessed((evt) => {
+		progressEvents.push(evt);
+	});
+
+	// Subscribing immediately emits initial state
+	assert.equal(progressEvents.length, 1);
+	assert.deepEqual(progressEvents[0], { validCount: 0, pendingCount: 0, totalCount: -1 });
+
+	await transport.startReceive();
+
+	const text = "Testing progress tracking event callback for QR transport";
+	const encoded = DataApi.encodeText(text, 100);
+	assert.ok(encoded.frames.length >= 3);
+
+	const f0 = new Uint8Array(encoded.frames[0].wireBytes);
+	const f1 = new Uint8Array(encoded.frames[1].wireBytes);
+
+	// Process non-first frame before First QR -> pending count increases, totalCount remains -1
+	transport.processFrame(f1);
+	const lastEventAfterF1 = progressEvents[progressEvents.length - 1];
+	assert.equal(lastEventAfterF1.validCount, 0);
+	assert.equal(lastEventAfterF1.pendingCount, 1);
+	assert.equal(lastEventAfterF1.totalCount, -1);
+
+	// Process First QR -> establishes communication, moves pending frames to valid stored frames, sets totalCount
+	transport.processFrame(f0);
+	const lastEventAfterF0 = progressEvents[progressEvents.length - 1];
+	assert.equal(lastEventAfterF0.validCount, 2); // f0 + f1 (drained from queue)
+	assert.equal(lastEventAfterF0.pendingCount, 0);
+	assert.equal(lastEventAfterF0.totalCount, encoded.frames.length);
+
+	// Stop receive -> resets state to (0, 0, -1)
+	transport.stopReceive();
+	const lastEventAfterStop = progressEvents[progressEvents.length - 1];
+	assert.deepEqual(lastEventAfterStop, { validCount: 0, pendingCount: 0, totalCount: -1 });
+});
