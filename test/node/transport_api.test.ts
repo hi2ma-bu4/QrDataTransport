@@ -258,7 +258,7 @@ test("TransportApi Receiver: onFrameProcessed emits progress events with (validC
 
 	// Subscribing immediately emits initial state
 	assert.equal(progressEvents.length, 1);
-	assert.deepEqual(progressEvents[0], { validCount: 0, pendingCount: 0, totalCount: -1 });
+	assert.deepEqual(progressEvents[0], { validCount: 0, pendingCount: 0, totalCount: -1, isQrDetected: false, bps: 0 });
 
 	await transport.startReceive();
 
@@ -286,5 +286,5 @@ test("TransportApi Receiver: onFrameProcessed emits progress events with (validC
 	// Stop receive -> resets state to (0, 0, -1)
 	transport.stopReceive();
 	const lastEventAfterStop = progressEvents[progressEvents.length - 1];
-	assert.deepEqual(lastEventAfterStop, { validCount: 0, pendingCount: 0, totalCount: -1 });
+	assert.deepEqual(lastEventAfterStop, { validCount: 0, pendingCount: 0, totalCount: -1, isQrDetected: false, bps: 0 });
 });

@@ -92,6 +92,8 @@ interface RenderQrOptions {
     canvas?: HTMLCanvasElement | string;
     width?: number;
     height?: number;
+    darkColor?: string;
+    lightColor?: string;
 }
 interface CameraOptions {
     deviceId?: string;
@@ -128,7 +130,6 @@ declare class BrowserRuntimeApi implements RuntimeApi {
     clearCanvas(canvasTarget?: HTMLCanvasElement | string): void;
     getAvailableVideoDevices(): Promise<MediaDeviceInfo[]>;
     startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
-    private drawDefaultScanOverlay;
     stopCamera(): void;
     isWorkerSupported(): boolean;
 }
@@ -284,10 +285,16 @@ interface ReceiveOptions {
     maxPendingFramesBeforeFirst?: number;
     useWorker?: boolean;
 }
+interface SendProgressEvent {
+    index: number;
+    maxIndex: number;
+}
 interface FrameProcessedEvent {
     validCount: number;
     pendingCount: number;
     totalCount: number;
+    isQrDetected: boolean;
+    bps: number;
 }
 declare class TransportApi {
     private state;
@@ -297,6 +304,7 @@ declare class TransportApi {
     private errorCallbacks;
     private completeCallbacks;
     private frameProcessedCallbacks;
+    private sendProgressCallbacks;
     private sendTimer;
     private sendWireFrames;
     private sendFrameIndex;
@@ -306,6 +314,9 @@ declare class TransportApi {
     private knownTotalQrCount?;
     private knownFirstFrameCrc?;
     private consecutiveCrcErrors;
+    private receiveStartTime;
+    private totalReceivedWireBits;
+    private lastQrDetected;
     constructor(config?: AppConfig, runtime?: RuntimeApi);
     setRuntime(runtime?: RuntimeApi): void;
     getConfig(): AppConfig;
@@ -313,8 +324,11 @@ declare class TransportApi {
     onWarning(callback: (warning: TransportWarning) => void): void;
     onError(callback: (error: TransportError) => void): void;
     onComplete(callback: (result: DecodedResult) => void): void;
+    onSendProgress(callback: (event: SendProgressEvent) => void): void;
     onFrameProcessed(callback: (event: FrameProcessedEvent) => void): void;
+    private buildFrameProcessedEvent;
     private emitFrameProcessed;
+    private emitSendProgress;
     private emitWarning;
     private emitError;
     private emitComplete;
@@ -329,7 +343,7 @@ declare class TransportApi {
     /**
      * Process an incoming raw wire frame array.
      */
-    processFrame(wireBytes: Uint8Array): void;
+    processFrame(wireBytes?: Uint8Array | null): void;
     private establishFirstQr;
     private removeSupersededPendingFrames;
     private processPostFirstFrame;

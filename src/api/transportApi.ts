@@ -36,10 +36,17 @@ export interface ReceiveOptions {
 	useWorker?: boolean;
 }
 
+export interface SendProgressEvent {
+	index: number;
+	maxIndex: number;
+}
+
 export interface FrameProcessedEvent {
 	validCount: number;
 	pendingCount: number;
 	totalCount: number;
+	isQrDetected: boolean;
+	bps: number;
 }
 
 export class TransportApi {
@@ -52,6 +59,7 @@ export class TransportApi {
 	private errorCallbacks: ((error: TransportError) => void)[] = [];
 	private completeCallbacks: ((result: DecodedResult) => void)[] = [];
 	private frameProcessedCallbacks: ((event: FrameProcessedEvent) => void)[] = [];
+	private sendProgressCallbacks: ((event: SendProgressEvent) => void)[] = [];
 
 	// Sender state
 	private sendTimer: ReturnType<typeof setInterval> | null = null;
@@ -65,6 +73,9 @@ export class TransportApi {
 	private knownTotalQrCount?: number;
 	private knownFirstFrameCrc?: number;
 	private consecutiveCrcErrors = 0;
+	private receiveStartTime: number | null = null;
+	private totalReceivedWireBits = 0;
+	private lastQrDetected = false;
 
 	constructor(config?: AppConfig, runtime?: RuntimeApi) {
 		this.config = config ? config.clone() : new AppConfig();
@@ -95,23 +106,47 @@ export class TransportApi {
 		this.completeCallbacks.push(callback);
 	}
 
+	public onSendProgress(callback: (event: SendProgressEvent) => void): void {
+		this.sendProgressCallbacks.push(callback);
+	}
+
 	public onFrameProcessed(callback: (event: FrameProcessedEvent) => void): void {
 		this.frameProcessedCallbacks.push(callback);
 		// Emit initial status when subscribing
-		callback({
+		callback(this.buildFrameProcessedEvent());
+	}
+
+	private buildFrameProcessedEvent(): FrameProcessedEvent {
+		let bps = 0;
+		if (this.receiveStartTime !== null) {
+			const elapsedSec = (performance.now() - this.receiveStartTime) / 1000;
+			if (elapsedSec > 0) {
+				bps = Math.round(this.totalReceivedWireBits / elapsedSec);
+			}
+		}
+		return {
 			validCount: this.storedFrames.size,
 			pendingCount: this.pendingPreFirstFrames.length,
 			totalCount: this.knownTotalQrCount ?? -1,
-		});
+			isQrDetected: this.lastQrDetected,
+			bps,
+		};
 	}
 
 	private emitFrameProcessed(): void {
-		const event: FrameProcessedEvent = {
-			validCount: this.storedFrames.size,
-			pendingCount: this.pendingPreFirstFrames.length,
-			totalCount: this.knownTotalQrCount ?? -1,
-		};
+		const event = this.buildFrameProcessedEvent();
 		for (const cb of this.frameProcessedCallbacks) {
+			cb(event);
+		}
+	}
+
+	private emitSendProgress(): void {
+		if (this.sendWireFrames.length === 0) return;
+		const event: SendProgressEvent = {
+			index: this.sendFrameIndex + 1, // 1-based indexing for external users
+			maxIndex: this.sendWireFrames.length,
+		};
+		for (const cb of this.sendProgressCallbacks) {
 			cb(event);
 		}
 	}
@@ -217,11 +252,13 @@ export class TransportApi {
 		};
 
 		renderCurrentFrame();
+		this.emitSendProgress();
 
 		this.sendTimer = setInterval(() => {
 			if (this.sendWireFrames.length === 0) return;
 			this.sendFrameIndex = (this.sendFrameIndex + 1) % this.sendWireFrames.length;
 			renderCurrentFrame();
+			this.emitSendProgress();
 		}, interval);
 	}
 
@@ -270,6 +307,7 @@ export class TransportApi {
 		}
 
 		this.resetReceiverState();
+		this.receiveStartTime = performance.now();
 		this.state = "WaitingForFirst";
 		this.emitFrameProcessed();
 	}
@@ -288,6 +326,9 @@ export class TransportApi {
 		this.knownTotalQrCount = undefined;
 		this.knownFirstFrameCrc = undefined;
 		this.consecutiveCrcErrors = 0;
+		this.receiveStartTime = null;
+		this.totalReceivedWireBits = 0;
+		this.lastQrDetected = false;
 		this.emitFrameProcessed();
 	}
 
@@ -298,10 +339,19 @@ export class TransportApi {
 	/**
 	 * Process an incoming raw wire frame array.
 	 */
-	public processFrame(wireBytes: Uint8Array): void {
-		if (this.state === "Idle" || this.state === "Completed" || this.state === "Error" || wireBytes.length === 0) {
+	public processFrame(wireBytes?: Uint8Array | null): void {
+		if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
+			this.lastQrDetected = false;
 			return;
 		}
+
+		if (!wireBytes || wireBytes.length === 0) {
+			this.lastQrDetected = false;
+			this.emitFrameProcessed();
+			return;
+		}
+
+		this.lastQrDetected = true;
 
 		try {
 			// Spec v8 Section 11 & 32: Start bit is 1 for First QR, 0 for Non-First
@@ -316,6 +366,7 @@ export class TransportApi {
 							this.pendingPreFirstFrames.push(wireBytes);
 						}
 					}
+					// Even if queue is full, real-time camera decoding and checking for First QR continues!
 					return;
 				}
 			}
@@ -379,6 +430,7 @@ export class TransportApi {
 		this.knownTotalQrCount = metadata.totalQrCount;
 		this.knownFirstFrameCrc = metadata.frameCrc;
 		this.storedFrames.set(0, wireBytes);
+		this.totalReceivedWireBits += wireBytes.length * 8;
 		this.state = metadata.totalQrCount === 1 ? "OverallCrcVerification" : "FirstEstablished";
 
 		if (metadata.totalQrCount === 1) {
@@ -458,6 +510,7 @@ export class TransportApi {
 
 		// New Frame arrival (CRC valid)
 		this.storedFrames.set(metadata.frameNumber, wireBytes);
+		this.totalReceivedWireBits += wireBytes.length * 8;
 
 		if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
 			this.state = "Receiving";

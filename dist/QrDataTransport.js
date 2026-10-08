@@ -10217,11 +10217,13 @@ var BrowserRuntimeApi = class {
     if (width <= 0 || height <= 0 || modules.length < width * height) {
       return;
     }
-    ctx.fillStyle = "#FFFFFF";
+    const darkColor = options?.darkColor ?? "#000000";
+    const lightColor = options?.lightColor ?? "#FFFFFF";
+    ctx.fillStyle = lightColor;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
     const moduleWidth = canvasWidth / width;
     const moduleHeight = canvasHeight / height;
-    ctx.fillStyle = "#000000";
+    ctx.fillStyle = darkColor;
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         if (modules[y * width + x] === 1) {
@@ -10296,7 +10298,6 @@ var BrowserRuntimeApi = class {
                 if (pCanvas.width !== vWidth) pCanvas.width = vWidth;
                 if (pCanvas.height !== vHeight) pCanvas.height = vHeight;
                 pCtx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
-                this.drawDefaultScanOverlay(pCtx, vWidth, vHeight);
                 if (options.drawOverlay) {
                   options.drawOverlay(pCtx, vWidth, vHeight);
                 }
@@ -10309,45 +10310,6 @@ var BrowserRuntimeApi = class {
       this.cameraAnimationId = requestAnimationFrame(captureLoop);
     };
     this.cameraAnimationId = requestAnimationFrame(captureLoop);
-  }
-  drawDefaultScanOverlay(ctx, width, height) {
-    const size = Math.min(width, height) * 0.65;
-    const x = (width - size) / 2;
-    const y = (height - size) / 2;
-    ctx.save();
-    ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
-    ctx.fillRect(0, 0, width, height);
-    ctx.clearRect(x, y, size, size);
-    if (this.cameraVideo) {
-      ctx.drawImage(this.cameraVideo, x, y, size, size, x, y, size, size);
-    }
-    ctx.strokeStyle = "#10b981";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x, y, size, size);
-    const lineLen = Math.min(size * 0.15, 24);
-    ctx.strokeStyle = "#34d399";
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(x, y + lineLen);
-    ctx.lineTo(x, y);
-    ctx.lineTo(x + lineLen, y);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x + size - lineLen, y);
-    ctx.lineTo(x + size, y);
-    ctx.lineTo(x + size, y + lineLen);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x, y + size - lineLen);
-    ctx.lineTo(x, y + size);
-    ctx.lineTo(x + lineLen, y + size);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x + size - lineLen, y + size);
-    ctx.lineTo(x + size, y + size);
-    ctx.lineTo(x + size, y + size - lineLen);
-    ctx.stroke();
-    ctx.restore();
   }
   stopCamera() {
     if (this.cameraAnimationId !== null && typeof cancelAnimationFrame !== "undefined") {
@@ -10639,6 +10601,7 @@ var TransportApi = class {
   errorCallbacks = [];
   completeCallbacks = [];
   frameProcessedCallbacks = [];
+  sendProgressCallbacks = [];
   // Sender state
   sendTimer = null;
   sendWireFrames = [];
@@ -10650,6 +10613,9 @@ var TransportApi = class {
   knownTotalQrCount;
   knownFirstFrameCrc;
   consecutiveCrcErrors = 0;
+  receiveStartTime = null;
+  totalReceivedWireBits = 0;
+  lastQrDetected = false;
   constructor(config, runtime) {
     this.config = config ? config.clone() : new AppConfig();
     this.runtime = runtime;
@@ -10672,21 +10638,43 @@ var TransportApi = class {
   onComplete(callback) {
     this.completeCallbacks.push(callback);
   }
+  onSendProgress(callback) {
+    this.sendProgressCallbacks.push(callback);
+  }
   onFrameProcessed(callback) {
     this.frameProcessedCallbacks.push(callback);
-    callback({
+    callback(this.buildFrameProcessedEvent());
+  }
+  buildFrameProcessedEvent() {
+    let bps = 0;
+    if (this.receiveStartTime !== null) {
+      const elapsedSec = (performance.now() - this.receiveStartTime) / 1e3;
+      if (elapsedSec > 0) {
+        bps = Math.round(this.totalReceivedWireBits / elapsedSec);
+      }
+    }
+    return {
       validCount: this.storedFrames.size,
       pendingCount: this.pendingPreFirstFrames.length,
-      totalCount: this.knownTotalQrCount ?? -1
-    });
+      totalCount: this.knownTotalQrCount ?? -1,
+      isQrDetected: this.lastQrDetected,
+      bps
+    };
   }
   emitFrameProcessed() {
-    const event = {
-      validCount: this.storedFrames.size,
-      pendingCount: this.pendingPreFirstFrames.length,
-      totalCount: this.knownTotalQrCount ?? -1
-    };
+    const event = this.buildFrameProcessedEvent();
     for (const cb of this.frameProcessedCallbacks) {
+      cb(event);
+    }
+  }
+  emitSendProgress() {
+    if (this.sendWireFrames.length === 0) return;
+    const event = {
+      index: this.sendFrameIndex + 1,
+      // 1-based indexing for external users
+      maxIndex: this.sendWireFrames.length
+    };
+    for (const cb of this.sendProgressCallbacks) {
       cb(event);
     }
   }
@@ -10779,10 +10767,12 @@ var TransportApi = class {
       }
     };
     renderCurrentFrame();
+    this.emitSendProgress();
     this.sendTimer = setInterval(() => {
       if (this.sendWireFrames.length === 0) return;
       this.sendFrameIndex = (this.sendFrameIndex + 1) % this.sendWireFrames.length;
       renderCurrentFrame();
+      this.emitSendProgress();
     }, interval);
   }
   getCurrentSendFrame() {
@@ -10823,6 +10813,7 @@ var TransportApi = class {
       }
     }
     this.resetReceiverState();
+    this.receiveStartTime = performance.now();
     this.state = "WaitingForFirst";
     this.emitFrameProcessed();
   }
@@ -10839,6 +10830,9 @@ var TransportApi = class {
     this.knownTotalQrCount = void 0;
     this.knownFirstFrameCrc = void 0;
     this.consecutiveCrcErrors = 0;
+    this.receiveStartTime = null;
+    this.totalReceivedWireBits = 0;
+    this.lastQrDetected = false;
     this.emitFrameProcessed();
   }
   getPendingPreFirstQueueLength() {
@@ -10848,9 +10842,16 @@ var TransportApi = class {
    * Process an incoming raw wire frame array.
    */
   processFrame(wireBytes) {
-    if (this.state === "Idle" || this.state === "Completed" || this.state === "Error" || wireBytes.length === 0) {
+    if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
+      this.lastQrDetected = false;
       return;
     }
+    if (!wireBytes || wireBytes.length === 0) {
+      this.lastQrDetected = false;
+      this.emitFrameProcessed();
+      return;
+    }
+    this.lastQrDetected = true;
     try {
       const isStartBitSet = (wireBytes[0] & 128) !== 0;
       if (this.state === "WaitingForFirst") {
@@ -10915,6 +10916,7 @@ var TransportApi = class {
     this.knownTotalQrCount = metadata2.totalQrCount;
     this.knownFirstFrameCrc = metadata2.frameCrc;
     this.storedFrames.set(0, wireBytes);
+    this.totalReceivedWireBits += wireBytes.length * 8;
     this.state = metadata2.totalQrCount === 1 ? "OverallCrcVerification" : "FirstEstablished";
     if (metadata2.totalQrCount === 1) {
       this.checkCompletion();
@@ -10977,6 +10979,7 @@ var TransportApi = class {
       return;
     }
     this.storedFrames.set(metadata2.frameNumber, wireBytes);
+    this.totalReceivedWireBits += wireBytes.length * 8;
     if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
       this.state = "Receiving";
     }

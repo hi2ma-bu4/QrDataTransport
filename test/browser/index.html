@@ -11,10 +11,17 @@
 		<h1>QrDataTransport テスト</h1>
 	</header>
 
-	<!-- 折りたたみ設定 UI -->
+	<!-- モード切り替えタブ -->
+	<nav class="mode-tabs">
+		<button id="tab-sender" type="button" class="tab-btn active">📤 送信 (Sender) モード</button>
+		<button id="tab-receiver" type="button" class="tab-btn">📥 受信 (Receiver) モード</button>
+	</nav>
+
+	<!-- 折りたたみ設定 UI (タブに応じて表示切替) -->
 	<details class="settings-card" open>
 		<summary>⚙️ 通信設定</summary>
-		<div class="settings-grid">
+		<!-- 送信用設定 -->
+		<div id="settings-sender" class="settings-grid">
 			<label>
 				データ型:
 				<select id="input-type">
@@ -43,6 +50,10 @@
 				送信間隔 (ms):
 				<input id="interval-ms" type="number" value="150" min="20">
 			</label>
+		</div>
+
+		<!-- 受信用設定 -->
+		<div id="settings-receiver" class="settings-grid" style="display: none;">
 			<label>
 				最大連続 CRC エラー:
 				<input id="max-crc-errors" type="number" value="16" min="0">
@@ -63,16 +74,13 @@
 		</div>
 	</details>
 
-	<!-- モード切り替えタブ -->
-	<nav class="mode-tabs">
-		<button id="tab-sender" type="button" class="tab-btn active">📤 送信 (Sender) モード</button>
-		<button id="tab-receiver" type="button" class="tab-btn">📥 受信 (Receiver) モード</button>
-	</nav>
-
 	<!-- 送信モード パネル -->
 	<div id="panel-sender" class="tab-content active">
 		<div class="card">
-			<h2>送信コントロール</h2>
+			<h2>
+				<span>送信コントロール</span>
+				<span id="send-progress-display" class="progress-display" title="(現在送信中Index/全フレーム数)">(-/-)</span>
+			</h2>
 			<div id="string-input-container">
 				<textarea id="input-text" rows="3">Hello QrDataTransport! This is a test message.</textarea>
 			</div>
@@ -95,11 +103,7 @@
 	<!-- 受信モード パネル -->
 	<div id="panel-receiver" class="tab-content">
 		<div class="card">
-			<h2>
-				<span>受信コントロール</span>
-				<!-- 受信進捗 UI: (a(b)/c) -->
-				<span id="progress-display" class="progress-display" title="(現在正常QR数(待機QR数)/要求QR数)">(0/N)</span>
-			</h2>
+			<h2>受信コントロール</h2>
 
 			<div class="btn-group">
 				<button id="btn-start-receive" type="button">受信開始 (Camera Scan)</button>
@@ -108,8 +112,16 @@
 			</div>
 
 			<div class="canvas-wrapper">
-				<h3>カメラ映像 & スキャンオーバーレイ</h3>
 				<canvas id="camera-canvas" width="300" height="300"></canvas>
+			</div>
+
+			<!-- 受信完了後のデータ表示領域 (テキストbox / ダウンロードボタン) -->
+			<div id="received-data-container" style="margin-top: 12px; display: none;">
+				<h3 style="font-size: 1rem; margin-bottom: 6px;">📥 受信完了データ</h3>
+				<textarea id="received-text" rows="4" style="width: 100%; display: none;" readonly></textarea>
+				<a id="download-file-btn" download="received_file" style="display: none; text-decoration: none;">
+					<button type="button">📁 受信ファイルをダウンロード</button>
+				</a>
 			</div>
 		</div>
 	</div>
