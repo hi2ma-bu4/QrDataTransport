@@ -7,7 +7,7 @@ import { DataApi } from "../api/dataApi";
 
 export interface WorkerRequestMessage {
 	id: string;
-	type: "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText";
+	type: "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage";
 	payload: any;
 }
 
@@ -63,6 +63,13 @@ export async function handleWorkerMessage(msg: WorkerRequestMessage): Promise<Wo
 				result = DataApi.encodeText(text, maxFrameBits);
 				break;
 			}
+			case "decodeQrImage": {
+				const { rgbaPixels, width, height } = msg.payload;
+				const pixels = new Uint8Array(rgbaPixels);
+				const wireBytes = DataApi.decodeQrImage(pixels, width, height);
+				result = Array.from(wireBytes);
+				break;
+			}
 			default:
 				throw new Error(`Unknown worker request type: ${msg.type}`);
 		}
@@ -113,6 +120,57 @@ export function setupWorkerSelfListener(): void {
 			self.postMessage(res);
 		});
 	}
+}
+
+/**
+ * Helper to execute decodeQrImage on a Worker instance offloading image decoding from the main thread.
+ */
+export function decodeQrImageInWorker(worker: Worker | { postMessage: (msg: any) => void; addEventListener?: (type: string, listener: (evt: any) => void) => void; on?: (type: string, listener: (msg: any) => void) => void }, rgbaPixels: Uint8Array, width: number, height: number): Promise<Uint8Array> {
+	return new Promise((resolve, reject) => {
+		const id = `qr-decode-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+		const listener = (data: WorkerResponseMessage) => {
+			if (data && data.id === id) {
+				cleanup();
+				if (data.success) {
+					resolve(new Uint8Array(data.result));
+				} else {
+					reject(new Error(data.error || "Worker decodeQrImage failed"));
+				}
+			}
+		};
+
+		const handleEvent = (event: MessageEvent<WorkerResponseMessage> | WorkerResponseMessage) => {
+			const data = (event && typeof event === "object" && "data" in event ? (event as MessageEvent).data : event) as WorkerResponseMessage;
+			listener(data);
+		};
+
+		const cleanup = () => {
+			if ("removeEventListener" in worker && typeof worker.removeEventListener === "function") {
+				worker.removeEventListener("message", handleEvent as any);
+			} else if ("off" in (worker as any) && typeof (worker as any).off === "function") {
+				(worker as any).off("message", handleEvent);
+			}
+		};
+
+		if ("addEventListener" in worker && typeof worker.addEventListener === "function") {
+			worker.addEventListener("message", handleEvent as any);
+		} else if ("on" in (worker as any) && typeof (worker as any).on === "function") {
+			(worker as any).on("message", handleEvent);
+		}
+
+		const message: WorkerRequestMessage = {
+			id,
+			type: "decodeQrImage",
+			payload: {
+				rgbaPixels: Array.from(rgbaPixels),
+				width,
+				height,
+			},
+		};
+
+		worker.postMessage(message);
+	});
 }
 
 // Auto setup listener if executing inside worker thread context

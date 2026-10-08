@@ -95,6 +95,7 @@ interface RenderQrOptions {
 }
 interface CameraOptions {
     deviceId?: string;
+    facingMode?: "environment" | "user" | string;
     fps?: number;
     width?: number;
     height?: number;
@@ -116,6 +117,7 @@ interface RuntimeApi {
     startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
     stopCamera(): void;
     isWorkerSupported(): boolean;
+    getAvailableVideoDevices?(): Promise<MediaDeviceInfo[]>;
 }
 declare class BrowserRuntimeApi implements RuntimeApi {
     private cameraStream;
@@ -124,6 +126,7 @@ declare class BrowserRuntimeApi implements RuntimeApi {
     private resolveCanvas;
     renderQrModuleMatrix(matrix: QrModuleMatrixData, options?: RenderQrOptions): void;
     clearCanvas(canvasTarget?: HTMLCanvasElement | string): void;
+    getAvailableVideoDevices(): Promise<MediaDeviceInfo[]>;
     startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
     private drawDefaultScanOverlay;
     stopCamera(): void;
@@ -226,6 +229,8 @@ interface BrowserRuntimeConfigOptions {
     qrHeight?: number;
     canvasWidth?: number;
     canvasHeight?: number;
+    facingMode?: "environment" | "user" | string;
+    deviceId?: string;
 }
 declare class BrowserRuntimeConfig {
     renderFps: number;
@@ -235,6 +240,8 @@ declare class BrowserRuntimeConfig {
     qrHeight: number;
     canvasWidth: number;
     canvasHeight: number;
+    facingMode: "environment" | "user" | string;
+    deviceId?: string;
     constructor(options?: BrowserRuntimeConfigOptions);
     clone(): BrowserRuntimeConfig;
 }
@@ -337,7 +344,7 @@ declare class TransportApi {
  */
 interface WorkerRequestMessage {
     id: string;
-    type: "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText";
+    type: "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage";
     payload: any;
 }
 interface WorkerResponseMessage {
@@ -350,6 +357,14 @@ interface WorkerResponseMessage {
 declare function isWorkerContext(): boolean;
 declare function handleWorkerMessage(msg: WorkerRequestMessage): Promise<WorkerResponseMessage>;
 declare function setupWorkerSelfListener(): void;
+/**
+ * Helper to execute decodeQrImage on a Worker instance offloading image decoding from the main thread.
+ */
+declare function decodeQrImageInWorker(worker: Worker | {
+    postMessage: (msg: any) => void;
+    addEventListener?: (type: string, listener: (evt: any) => void) => void;
+    on?: (type: string, listener: (msg: any) => void) => void;
+}, rgbaPixels: Uint8Array, width: number, height: number): Promise<Uint8Array>;
 
-export { AppConfig, BrowserRuntimeApi, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, handleWorkerMessage, isWorkerContext, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener };
+export { AppConfig, BrowserRuntimeApi, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, decodeQrImageInWorker, handleWorkerMessage, isWorkerContext, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener };
 export type { CameraOptions, DecodedResult, ErrorCode, ReceiveOptions, RenderQrOptions, RuntimeApi, SendOptions, TransportError, TransportState, TransportWarning, WarningCode };

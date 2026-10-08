@@ -117,6 +117,8 @@ export interface BrowserRuntimeConfigOptions {
 	qrHeight?: number;
 	canvasWidth?: number;
 	canvasHeight?: number;
+	facingMode?: "environment" | "user" | string;
+	deviceId?: string;
 }
 
 export class BrowserRuntimeConfig {
@@ -127,6 +129,8 @@ export class BrowserRuntimeConfig {
 	public qrHeight: number;
 	public canvasWidth: number;
 	public canvasHeight: number;
+	public facingMode: "environment" | "user" | string;
+	public deviceId?: string;
 
 	constructor(options?: BrowserRuntimeConfigOptions) {
 		this.renderFps = options?.renderFps ?? 10;
@@ -136,6 +140,8 @@ export class BrowserRuntimeConfig {
 		this.qrHeight = options?.qrHeight ?? 300;
 		this.canvasWidth = options?.canvasWidth ?? 300;
 		this.canvasHeight = options?.canvasHeight ?? 300;
+		this.facingMode = options?.facingMode ?? "environment";
+		this.deviceId = options?.deviceId;
 	}
 
 	public clone(): BrowserRuntimeConfig {
@@ -147,6 +153,8 @@ export class BrowserRuntimeConfig {
 			qrHeight: this.qrHeight,
 			canvasWidth: this.canvasWidth,
 			canvasHeight: this.canvasHeight,
+			facingMode: this.facingMode,
+			deviceId: this.deviceId,
 		});
 	}
 }

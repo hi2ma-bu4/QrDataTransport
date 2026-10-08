@@ -10240,17 +10240,30 @@ var BrowserRuntimeApi = class {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
   }
+  async getAvailableVideoDevices() {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      return [];
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((device) => device.kind === "videoinput");
+  }
   async startCamera(onFrame, options) {
     if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       throw new Error("Camera API (navigator.mediaDevices.getUserMedia) is not available in this environment");
     }
     this.stopCamera();
+    const facingMode = options?.facingMode ?? "environment";
+    const videoConstraints = {
+      width: options?.width ? { ideal: options.width } : void 0,
+      height: options?.height ? { ideal: options.height } : void 0
+    };
+    if (options?.deviceId) {
+      videoConstraints.deviceId = { exact: options.deviceId };
+    } else if (facingMode) {
+      videoConstraints.facingMode = { ideal: facingMode };
+    }
     const constraints = {
-      video: {
-        deviceId: options?.deviceId ? { exact: options.deviceId } : void 0,
-        width: options?.width ? { ideal: options.width } : void 0,
-        height: options?.height ? { ideal: options.height } : void 0
-      }
+      video: videoConstraints
     };
     this.cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
     this.cameraVideo = document.createElement("video");
@@ -10571,6 +10584,8 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
   qrHeight;
   canvasWidth;
   canvasHeight;
+  facingMode;
+  deviceId;
   constructor(options) {
     this.renderFps = options?.renderFps ?? 10;
     this.cameraFps = options?.cameraFps ?? 30;
@@ -10579,6 +10594,8 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
     this.qrHeight = options?.qrHeight ?? 300;
     this.canvasWidth = options?.canvasWidth ?? 300;
     this.canvasHeight = options?.canvasHeight ?? 300;
+    this.facingMode = options?.facingMode ?? "environment";
+    this.deviceId = options?.deviceId;
   }
   clone() {
     return new _BrowserRuntimeConfig({
@@ -10588,7 +10605,9 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
       qrWidth: this.qrWidth,
       qrHeight: this.qrHeight,
       canvasWidth: this.canvasWidth,
-      canvasHeight: this.canvasHeight
+      canvasHeight: this.canvasHeight,
+      facingMode: this.facingMode,
+      deviceId: this.deviceId
     });
   }
 };
@@ -11068,6 +11087,13 @@ async function handleWorkerMessage(msg) {
         result = DataApi.encodeText(text, maxFrameBits);
         break;
       }
+      case "decodeQrImage": {
+        const { rgbaPixels, width, height } = msg.payload;
+        const pixels = new Uint8Array(rgbaPixels);
+        const wireBytes = DataApi.decodeQrImage(pixels, width, height);
+        result = Array.from(wireBytes);
+        break;
+      }
       default:
         throw new Error(`Unknown worker request type: ${msg.type}`);
     }
@@ -11114,6 +11140,47 @@ function setupWorkerSelfListener() {
     });
   }
 }
+function decodeQrImageInWorker(worker, rgbaPixels, width, height) {
+  return new Promise((resolve, reject) => {
+    const id2 = `qr-decode-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const listener = (data) => {
+      if (data && data.id === id2) {
+        cleanup();
+        if (data.success) {
+          resolve(new Uint8Array(data.result));
+        } else {
+          reject(new Error(data.error || "Worker decodeQrImage failed"));
+        }
+      }
+    };
+    const handleEvent = (event) => {
+      const data = event && typeof event === "object" && "data" in event ? event.data : event;
+      listener(data);
+    };
+    const cleanup = () => {
+      if ("removeEventListener" in worker && typeof worker.removeEventListener === "function") {
+        worker.removeEventListener("message", handleEvent);
+      } else if ("off" in worker && typeof worker.off === "function") {
+        worker.off("message", handleEvent);
+      }
+    };
+    if ("addEventListener" in worker && typeof worker.addEventListener === "function") {
+      worker.addEventListener("message", handleEvent);
+    } else if ("on" in worker && typeof worker.on === "function") {
+      worker.on("message", handleEvent);
+    }
+    const message = {
+      id: id2,
+      type: "decodeQrImage",
+      payload: {
+        rgbaPixels: Array.from(rgbaPixels),
+        width,
+        height
+      }
+    };
+    worker.postMessage(message);
+  });
+}
 setupWorkerSelfListener();
 export {
   AppConfig,
@@ -11123,6 +11190,7 @@ export {
   DataConfig,
   TransportApi,
   TransportConfig,
+  decodeQrImageInWorker,
   handleWorkerMessage,
   isWorkerContext,
   protocol,

@@ -34,13 +34,22 @@ test("DataConfig default values and boundary checks", () => {
 	assert.throws(() => new DataConfig({ ecLevel: "x" as any }), /ecLevel/);
 });
 
-test("BrowserRuntimeConfig default values", () => {
+test("BrowserRuntimeConfig default values and camera options", () => {
 	const config = new BrowserRuntimeConfig();
 	assert.equal(config.renderFps, 10);
 	assert.equal(config.cameraFps, 30);
 	assert.equal(config.decodeFrequency, 10);
 	assert.equal(config.qrWidth, 300);
 	assert.equal(config.qrHeight, 300);
+	assert.equal(config.facingMode, "environment");
+	assert.equal(config.deviceId, undefined);
+
+	const customConfig = new BrowserRuntimeConfig({
+		facingMode: "user",
+		deviceId: "cam-123",
+	});
+	assert.equal(customConfig.facingMode, "user");
+	assert.equal(customConfig.deviceId, "cam-123");
 });
 
 test("AppConfig independence and clone", () => {

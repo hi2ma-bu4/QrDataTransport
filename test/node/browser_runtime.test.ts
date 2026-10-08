@@ -2,7 +2,7 @@ import assert from "node:assert";
 import { test } from "node:test";
 import { BrowserRuntimeApi } from "../../dist/QrDataTransport.js";
 
-test("BrowserRuntimeApi instantiation and features", () => {
+test("BrowserRuntimeApi instantiation and features", async () => {
 	const runtime = new BrowserRuntimeApi();
 
 	// In Node environment, Worker is defined
@@ -17,6 +17,11 @@ test("BrowserRuntimeApi instantiation and features", () => {
 
 	runtime.clearCanvas();
 	runtime.stopCamera();
+
+	// getAvailableVideoDevices returns empty array in node environment
+	const devices = await runtime.getAvailableVideoDevices();
+	assert.ok(Array.isArray(devices));
+	assert.strictEqual(devices.length, 0);
 });
 
 test("BrowserRuntimeApi camera start throws in node environment without navigator.mediaDevices", async () => {

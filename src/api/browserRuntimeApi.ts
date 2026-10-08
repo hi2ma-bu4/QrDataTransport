@@ -6,6 +6,7 @@ export interface RenderQrOptions {
 
 export interface CameraOptions {
 	deviceId?: string;
+	facingMode?: "environment" | "user" | string;
 	fps?: number;
 	width?: number;
 	height?: number;
@@ -29,6 +30,7 @@ export interface RuntimeApi {
 	startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
 	stopCamera(): void;
 	isWorkerSupported(): boolean;
+	getAvailableVideoDevices?(): Promise<MediaDeviceInfo[]>;
 }
 
 export class BrowserRuntimeApi implements RuntimeApi {
@@ -104,6 +106,14 @@ export class BrowserRuntimeApi implements RuntimeApi {
 		}
 	}
 
+	public async getAvailableVideoDevices(): Promise<MediaDeviceInfo[]> {
+		if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+			return [];
+		}
+		const devices = await navigator.mediaDevices.enumerateDevices();
+		return devices.filter((device) => device.kind === "videoinput");
+	}
+
 	public async startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void> {
 		if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
 			throw new Error("Camera API (navigator.mediaDevices.getUserMedia) is not available in this environment");
@@ -111,12 +121,20 @@ export class BrowserRuntimeApi implements RuntimeApi {
 
 		this.stopCamera();
 
+		const facingMode = options?.facingMode ?? "environment";
+		const videoConstraints: MediaTrackConstraints = {
+			width: options?.width ? { ideal: options.width } : undefined,
+			height: options?.height ? { ideal: options.height } : undefined,
+		};
+
+		if (options?.deviceId) {
+			videoConstraints.deviceId = { exact: options.deviceId };
+		} else if (facingMode) {
+			videoConstraints.facingMode = { ideal: facingMode };
+		}
+
 		const constraints: MediaStreamConstraints = {
-			video: {
-				deviceId: options?.deviceId ? { exact: options.deviceId } : undefined,
-				width: options?.width ? { ideal: options.width } : undefined,
-				height: options?.height ? { ideal: options.height } : undefined,
-			},
+			video: videoConstraints,
 		};
 
 		this.cameraStream = await navigator.mediaDevices.getUserMedia(constraints);

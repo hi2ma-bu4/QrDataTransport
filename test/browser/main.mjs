@@ -6,6 +6,8 @@ const ecLevelSelect = document.getElementById("ec-level");
 const calcMaxFrameBitsSpan = document.getElementById("calc-max-frame-bits");
 const intervalMsInput = document.getElementById("interval-ms");
 const maxCrcErrorsInput = document.getElementById("max-crc-errors");
+const cameraFacingSelect = document.getElementById("camera-facing");
+const cameraDeviceSelect = document.getElementById("camera-device");
 
 const stringInputContainer = document.getElementById("string-input-container");
 const fileInputContainer = document.getElementById("file-input-container");
@@ -134,10 +136,33 @@ btnStopSend.addEventListener("click", () => {
 	log("Stopped sender.");
 });
 
+async function populateCameraDevices() {
+	if (!runtime.getAvailableVideoDevices) return;
+	try {
+		const devices = await runtime.getAvailableVideoDevices();
+		if (cameraDeviceSelect) {
+			cameraDeviceSelect.innerHTML = '<option value="">デフォルト (Facing Mode 優先)</option>';
+			devices.forEach((dev, idx) => {
+				const opt = document.createElement("option");
+				opt.value = dev.deviceId;
+				opt.textContent = dev.label || `カメラ ${idx + 1} (${dev.deviceId.slice(0, 8)}...)`;
+				cameraDeviceSelect.appendChild(opt);
+			});
+		}
+	} catch {
+		// Device enumeration optional
+	}
+}
+
+populateCameraDevices();
+
 btnStartReceive.addEventListener("click", async () => {
 	try {
 		const maxConsecutiveCrcErrors = Number(maxCrcErrorsInput.value);
 		await transport.startReceive({ maxConsecutiveCrcErrors });
+
+		const facingMode = cameraFacingSelect ? cameraFacingSelect.value : "environment";
+		const deviceId = cameraDeviceSelect && cameraDeviceSelect.value ? cameraDeviceSelect.value : undefined;
 
 		await runtime.startCamera(
 			(rgbaPixels, width, height) => {
@@ -150,10 +175,14 @@ btnStartReceive.addEventListener("click", async () => {
 					// Ignore frames where QR code is not found or decode fails
 				}
 			},
-			{ previewCanvas: "camera-canvas" },
+			{
+				previewCanvas: "camera-canvas",
+				facingMode,
+				deviceId,
+			},
 		);
 
-		log("Started receiver and camera feed.");
+		log(`Started receiver and camera feed (facingMode: ${facingMode}${deviceId ? `, deviceId: ${deviceId}` : ""}).`);
 	} catch (err) {
 		log(`Failed to start receiver: ${String(err)}`);
 	}

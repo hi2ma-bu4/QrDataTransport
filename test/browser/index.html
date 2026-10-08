@@ -47,6 +47,19 @@
 				最大連続 CRC エラー:
 				<input id="max-crc-errors" type="number" value="16" min="0">
 			</label>
+			<label>
+				カメラ向き (Facing Mode):
+				<select id="camera-facing">
+					<option value="environment" selected>外カメラ (環境・背面)</option>
+					<option value="user">内カメラ (ユーザー・前面)</option>
+				</select>
+			</label>
+			<label>
+				指定カメラデバイス:
+				<select id="camera-device">
+					<option value="">デフォルト (Facing Mode 優先)</option>
+				</select>
+			</label>
 		</div>
 	</details>
 
