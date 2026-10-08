@@ -10349,7 +10349,9 @@ function calculateMaxFrameBits(qrVersion, ecLevel) {
   const eccCodewords = ECC_CODEWORDS_PER_BLOCK[ecIndex][version];
   const numBlocks = NUM_ERROR_CORRECTION_BLOCKS[ecIndex][version];
   const dataCodewords = rawCodewords - eccCodewords * numBlocks;
-  return dataCodewords * 8;
+  const totalDataBits = dataCodewords * 8;
+  const segmentHeaderBits = version < 10 ? 12 : 20;
+  return Math.max(1, totalDataBits - segmentHeaderBits);
 }
 
 // src/api/dataApi.ts

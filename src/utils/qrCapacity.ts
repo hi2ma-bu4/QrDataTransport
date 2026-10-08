@@ -15,7 +15,8 @@ const NUM_ERROR_CORRECTION_BLOCKS: number[][] = [
 ];
 
 /**
- * Calculates the maximum total frame bits available in a QR code of a given version and EC level.
+ * Calculates the maximum wire frame bits available in a QR code of a given version and EC level,
+ * accounting for QR Code Byte Segment Header overhead (12 bits for Ver 1..9, 20 bits for Ver 10..40).
  */
 export function calculateMaxFrameBits(qrVersion: number, ecLevel: QrEcLevel): number {
 	if (qrVersion < 1 || qrVersion > 40) {
@@ -55,5 +56,10 @@ export function calculateMaxFrameBits(qrVersion: number, ecLevel: QrEcLevel): nu
 	const numBlocks = NUM_ERROR_CORRECTION_BLOCKS[ecIndex][version];
 
 	const dataCodewords = rawCodewords - eccCodewords * numBlocks;
-	return dataCodewords * 8;
+	const totalDataBits = dataCodewords * 8;
+
+	// Subtract QR Code Byte Segment Header overhead (4 bits mode indicator + 8/16 bits character count indicator)
+	const segmentHeaderBits = version < 10 ? 12 : 20;
+
+	return Math.max(1, totalDataBits - segmentHeaderBits);
 }
