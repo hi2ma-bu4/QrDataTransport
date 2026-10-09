@@ -101,6 +101,7 @@ interface CameraOptions {
     fps?: number;
     width?: number;
     height?: number;
+    isManual?: boolean;
     previewCanvas?: HTMLCanvasElement | string;
     drawOverlay?: (ctx: CanvasRenderingContext2D, width: number, height: number) => void;
 }

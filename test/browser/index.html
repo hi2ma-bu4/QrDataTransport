@@ -2,136 +2,149 @@
 <html lang="ja">
 <head>
 	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 	<title>QrDataTransport Interactive Test Page</title>
 	<link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-	<header>
-		<h1>QrDataTransport テスト</h1>
-	</header>
+	<div class="app-layout">
+		<!-- ヘッダー & モード切替タブ & 設定ドロワーボタン -->
+		<header class="app-header">
+			<h1 class="app-title">QrDataTransport</h1>
 
-	<!-- モード切り替えタブ -->
-	<nav class="mode-tabs">
-		<button id="tab-sender" type="button" class="tab-btn active">📤 送信 (Sender) モード</button>
-		<button id="tab-receiver" type="button" class="tab-btn">📥 受信 (Receiver) モード</button>
-	</nav>
+			<nav class="mode-tabs">
+				<button id="tab-sender" type="button" class="tab-btn active" title="送信 (Sender) モード">📤 送信</button>
+				<button id="tab-receiver" type="button" class="tab-btn" title="受信 (Receiver) モード">📥 受信</button>
+			</nav>
 
-	<!-- 折りたたみ設定 UI (タブに応じて表示切替) -->
-	<details class="settings-card" open>
-		<summary>⚙️ 通信設定</summary>
-		<!-- 送信用設定 -->
-		<div id="settings-sender" class="settings-grid">
-			<label>
-				データ型:
-				<select id="input-type">
-					<option value="string" selected>文字列 (String)</option>
-					<option value="file">ファイル (Uint8Array)</option>
-				</select>
-			</label>
-			<label>
-				QR Version (1-40):
-				<input id="qr-version" type="number" value="5" min="1" max="40">
-			</label>
-			<label>
-				EC Level:
-				<select id="ec-level">
-					<option value="l">L (7%)</option>
-					<option value="m" selected>M (15%)</option>
-					<option value="q">Q (25%)</option>
-					<option value="h">H (30%)</option>
-				</select>
-			</label>
-			<label>
-				自動計算フレームbit容量:
-				<span id="calc-max-frame-bits" class="calculated-info">688 bits</span>
-			</label>
-			<label>
-				送信間隔 (ms):
-				<input id="interval-ms" type="number" value="80" min="20">
-			</label>
-		</div>
-
-		<!-- 受信用設定 -->
-		<div id="settings-receiver" class="settings-grid" style="display: none;">
-			<label>
-				最大連続 CRC エラー:
-				<input id="max-crc-errors" type="number" value="16" min="0">
-			</label>
-			<label>
-				カメラ向き (Facing Mode):
-				<select id="camera-facing">
-					<option value="environment" selected>外カメラ (環境・背面)</option>
-					<option value="user">内カメラ (ユーザー・前面)</option>
-				</select>
-			</label>
-			<label>
-				指定カメラデバイス:
-				<select id="camera-device">
-					<option value="">デフォルト (Facing Mode 優先)</option>
-				</select>
-			</label>
-		</div>
-	</details>
-
-	<!-- 送信モード パネル -->
-	<div id="panel-sender" class="tab-content active">
-		<div class="card">
-			<h2>
-				<span>送信コントロール</span>
-				<span id="send-progress-display" class="progress-display" title="(現在送信中Index/全フレーム数)">(-/-)</span>
-			</h2>
-			<div id="string-input-container">
-				<textarea id="input-text" rows="3">Hello QrDataTransport! This is a test message.</textarea>
+			<div class="header-actions">
+				<button id="btn-toggle-settings" type="button" class="icon-btn" title="通信設定を開く">⚙️</button>
 			</div>
-			<div id="file-input-container" style="display: none;">
-				<input id="input-file" type="file">
-			</div>
+		</header>
 
-			<div class="btn-group">
-				<button id="btn-start-send" type="button">送信開始 (Render QR)</button>
-				<button id="btn-stop-send" type="button" class="stop">送信停止</button>
+		<!-- フローティング設定ドロワー (オーバーレイ & 内部スクロール) -->
+		<div id="settings-drawer" class="settings-drawer" style="display: none;">
+			<div class="drawer-header">
+				<h3>⚙️ 通信設定</h3>
+				<button id="btn-close-settings" type="button" class="icon-btn close-btn" title="設定を閉じる">✖</button>
 			</div>
+			<div class="drawer-body">
+				<!-- 送信用設定 -->
+				<div id="settings-sender" class="settings-grid">
+					<label>
+						データ型:
+						<select id="input-type">
+							<option value="string" selected>文字列 (String)</option>
+							<option value="file">ファイル (Uint8Array)</option>
+						</select>
+					</label>
+					<label>
+						QR Version (1-40):
+						<input id="qr-version" type="number" value="5" min="1" max="40">
+					</label>
+					<label>
+						EC Level:
+						<select id="ec-level">
+							<option value="l">L (7%)</option>
+							<option value="m" selected>M (15%)</option>
+							<option value="q">Q (25%)</option>
+							<option value="h">H (30%)</option>
+						</select>
+					</label>
+					<label>
+						自動計算フレーム容量:
+						<span id="calc-max-frame-bits" class="calculated-info">688 bits</span>
+					</label>
+					<label>
+						送信間隔 (ms):
+						<input id="interval-ms" type="number" value="80" min="20">
+					</label>
+				</div>
 
-			<div class="canvas-wrapper">
-				<h3>送信QRコード表示</h3>
-				<canvas id="qr-canvas" width="280" height="280"></canvas>
+				<!-- 受信用設定 -->
+				<div id="settings-receiver" class="settings-grid" style="display: none;">
+					<label>
+						最大連続 CRC エラー:
+						<input id="max-crc-errors" type="number" value="16" min="0">
+					</label>
+					<label>
+						カメラ向き (Facing Mode):
+						<select id="camera-facing">
+							<option value="environment" selected>外カメラ (環境・背面)</option>
+							<option value="user">内カメラ (ユーザー・前面)</option>
+						</select>
+					</label>
+					<label>
+						指定カメラデバイス:
+						<select id="camera-device">
+							<option value="">デフォルト (Facing Mode 優先)</option>
+						</select>
+					</label>
+				</div>
 			</div>
 		</div>
-	</div>
 
-	<!-- 受信モード パネル -->
-	<div id="panel-receiver" class="tab-content">
-		<div class="card">
-			<h2>受信コントロール</h2>
+		<!-- メイン表示コンテンツエリア (送信/受信) -->
+		<main class="main-content">
+			<!-- 送信モード パネル -->
+			<section id="panel-sender" class="tab-content active">
+				<div class="control-toolbar">
+					<div id="string-input-container" class="input-container">
+						<textarea id="input-text" rows="1" placeholder="送信メッセージを入力...">Hello QrDataTransport! High Version test message.</textarea>
+					</div>
+					<div id="file-input-container" class="input-container" style="display: none;">
+						<input id="input-file" type="file">
+					</div>
 
-			<div class="btn-group">
-				<button id="btn-start-receive" type="button">受信開始 (Camera Scan)</button>
-				<button id="btn-stop-receive" type="button" class="stop">受信停止</button>
-				<button id="btn-simulate-loopback" type="button" class="secondary">Sender Canvasループバック</button>
+					<div class="icon-btn-group">
+						<button id="btn-start-send" type="button" class="action-btn primary" title="送信開始 (Render QR)">▶️ 送信</button>
+						<button id="btn-stop-send" type="button" class="action-btn danger" title="送信停止">⏹️ 停止</button>
+						<span id="send-progress-display" class="progress-badge" title="送信進捗 (現在/全フレーム)">(-/-)</span>
+					</div>
+				</div>
+
+				<div class="canvas-display-wrapper">
+					<canvas id="qr-canvas"></canvas>
+				</div>
+			</section>
+
+			<!-- 受信モード パネル -->
+			<section id="panel-receiver" class="tab-content">
+				<div class="control-toolbar">
+					<div class="icon-btn-group">
+						<button id="btn-start-receive" type="button" class="action-btn primary" title="受信開始 (Camera Scan)">▶️ 受信</button>
+						<button id="btn-stop-receive" type="button" class="action-btn danger" title="受信停止">⏹️ 停止</button>
+						<button id="btn-simulate-loopback" type="button" class="action-btn secondary" title="Sender Canvas ループバック">🔄 ループバック</button>
+					</div>
+				</div>
+
+				<div class="canvas-display-wrapper">
+					<canvas id="camera-canvas"></canvas>
+
+					<!-- 受信完了ポップアップ / モーダル -->
+					<div id="received-data-modal" class="received-modal" style="display: none;">
+						<div class="received-modal-header">
+							<h3>📥 受信完了データ</h3>
+							<button id="btn-close-received" type="button" class="icon-btn close-btn" title="閉じる">✖</button>
+						</div>
+						<div class="received-modal-body">
+							<textarea id="received-text" rows="3" readonly style="display: none;"></textarea>
+							<a id="download-file-btn" download="received_file" style="display: none;">
+								<button type="button" class="action-btn primary">📁 ファイルダウンロード</button>
+							</a>
+						</div>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<!-- フッター (ステータス & 内部スクロールログ) -->
+		<footer class="app-footer">
+			<div class="status-strip">
+				<span><strong>State:</strong> <span id="status-state">Idle</span></span>
 			</div>
-
-			<div class="canvas-wrapper">
-				<canvas id="camera-canvas" width="300" height="300"></canvas>
-			</div>
-
-			<!-- 受信完了後のデータ表示領域 (テキストbox / ダウンロードボタン) -->
-			<div id="received-data-container" style="margin-top: 12px; display: none;">
-				<h3 style="font-size: 1rem; margin-bottom: 6px;">📥 受信完了データ</h3>
-				<textarea id="received-text" rows="4" style="width: 100%; display: none;" readonly></textarea>
-				<a id="download-file-btn" download="received_file" style="display: none; text-decoration: none;">
-					<button type="button">📁 受信ファイルをダウンロード</button>
-				</a>
-			</div>
-		</div>
-	</div>
-
-	<!-- ステータス & ログ (共通) -->
-	<div class="card" style="margin-top: 12px;">
-		<div class="status-bar">
-			<div><strong>State:</strong> <span id="status-state">Idle</span></div>
-		</div>
-		<pre id="log-output">Ready.</pre>
+			<pre id="log-output">Ready.</pre>
+		</footer>
 	</div>
 
 	<script type="module" src="./main.mjs"></script>

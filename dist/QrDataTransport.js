@@ -10221,13 +10221,20 @@ var BrowserRuntimeApi = class {
     const lightColor = options?.lightColor ?? "#FFFFFF";
     ctx.fillStyle = lightColor;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-    const moduleWidth = canvasWidth / width;
-    const moduleHeight = canvasHeight / height;
+    ctx.imageSmoothingEnabled = false;
+    if ("mozImageSmoothingEnabled" in ctx) ctx.mozImageSmoothingEnabled = false;
+    if ("webkitImageSmoothingEnabled" in ctx) ctx.webkitImageSmoothingEnabled = false;
     ctx.fillStyle = darkColor;
     for (let y = 0; y < height; y++) {
+      const startY = Math.round(y * canvasHeight / height);
+      const endY = Math.round((y + 1) * canvasHeight / height);
+      const h = endY - startY;
       for (let x = 0; x < width; x++) {
         if (modules[y * width + x] === 1) {
-          ctx.fillRect(x * moduleWidth, y * moduleHeight, moduleWidth, moduleHeight);
+          const startX = Math.round(x * canvasWidth / width);
+          const endX = Math.round((x + 1) * canvasWidth / width);
+          const w = endX - startX;
+          ctx.fillRect(startX, startY, w, h);
         }
       }
     }
@@ -10268,6 +10275,19 @@ var BrowserRuntimeApi = class {
       video: videoConstraints
     };
     this.cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+    if (options?.isManual ?? true) {
+      const track = this.cameraStream.getVideoTracks()[0];
+      if (track) {
+        try {
+          await track.applyConstraints({
+            focusMode: { ideal: "manual" },
+            exposureMode: { ideal: "manual" },
+            whiteBalanceMode: { ideal: "manual" }
+          });
+        } catch {
+        }
+      }
+    }
     this.cameraVideo = document.createElement("video");
     this.cameraVideo.srcObject = this.cameraStream;
     this.cameraVideo.setAttribute("playsinline", "true");

@@ -9,6 +9,10 @@ const maxCrcErrorsInput = document.getElementById("max-crc-errors");
 const cameraFacingSelect = document.getElementById("camera-facing");
 const cameraDeviceSelect = document.getElementById("camera-device");
 
+const settingsDrawer = document.getElementById("settings-drawer");
+const btnToggleSettings = document.getElementById("btn-toggle-settings");
+const btnCloseSettings = document.getElementById("btn-close-settings");
+
 const settingsSender = document.getElementById("settings-sender");
 const settingsReceiver = document.getElementById("settings-receiver");
 
@@ -27,7 +31,8 @@ const statusState = document.getElementById("status-state");
 const logOutput = document.getElementById("log-output");
 const sendProgressDisplay = document.getElementById("send-progress-display");
 
-const receivedDataContainer = document.getElementById("received-data-container");
+const receivedDataModal = document.getElementById("received-data-modal");
+const btnCloseReceived = document.getElementById("btn-close-received");
 const receivedTextarea = document.getElementById("received-text");
 const downloadFileBtn = document.getElementById("download-file-btn");
 
@@ -47,13 +52,29 @@ let latestFrameEvent = {
 	bps: 0,
 };
 
+// Toggle Settings Drawer Overlay
+btnToggleSettings.addEventListener("click", () => {
+	const isVisible = settingsDrawer.style.display !== "none";
+	settingsDrawer.style.display = isVisible ? "none" : "flex";
+});
+
+btnCloseSettings.addEventListener("click", () => {
+	settingsDrawer.style.display = "none";
+});
+
+if (btnCloseReceived) {
+	btnCloseReceived.addEventListener("click", () => {
+		receivedDataModal.style.display = "none";
+	});
+}
+
 // Tab Switching & Settings Visibility Control
 tabSender.addEventListener("click", () => {
 	tabSender.classList.add("active");
 	tabReceiver.classList.remove("active");
 	panelSender.classList.add("active");
 	panelReceiver.classList.remove("active");
-	if (settingsSender) settingsSender.style.display = "grid";
+	if (settingsSender) settingsSender.style.display = "flex";
 	if (settingsReceiver) settingsReceiver.style.display = "none";
 });
 
@@ -63,7 +84,7 @@ tabReceiver.addEventListener("click", () => {
 	panelReceiver.classList.add("active");
 	panelSender.classList.remove("active");
 	if (settingsSender) settingsSender.style.display = "none";
-	if (settingsReceiver) settingsReceiver.style.display = "grid";
+	if (settingsReceiver) settingsReceiver.style.display = "flex";
 });
 
 function updateCalculatedCapacity() {
@@ -109,8 +130,8 @@ transport.onError((err) => {
 transport.onComplete((res) => {
 	log(`[COMPLETE] Communication finished. Received ${res.type} data.`);
 
-	if (receivedDataContainer) {
-		receivedDataContainer.style.display = "block";
+	if (receivedDataModal) {
+		receivedDataModal.style.display = "block";
 	}
 
 	if (res.type === "string") {
@@ -145,11 +166,24 @@ transport.onFrameProcessed((evt) => {
 });
 
 /**
+ * Compute optimal maximum canvas size based on parent container dimensions.
+ */
+function computeOptimalCanvasDimensions(canvasId) {
+	const canvas = document.getElementById(canvasId);
+	if (!canvas || !canvas.parentElement) return { width: 400, height: 400 };
+
+	const rect = canvas.parentElement.getBoundingClientRect();
+	const size = Math.floor(Math.min(rect.width, rect.height) - 12);
+	const clampedSize = Math.max(size, 200);
+	return { width: clampedSize, height: clampedSize };
+}
+
+/**
  * Draw custom camera scan overlay with real-time HUD and green/red border indicator.
  */
 function drawCameraOverlay(ctx, width, height) {
 	const isDetected = latestFrameEvent.isQrDetected;
-	const borderColor = isDetected ? "#10b981" : "#ef4444"; // Green when detected, Red otherwise
+	const borderColor = isDetected ? "#10b981" : "#ef4444";
 	const cornerColor = isDetected ? "#34d399" : "#f87171";
 
 	const size = Math.min(width, height) * 0.65;
@@ -196,15 +230,15 @@ function drawCameraOverlay(ctx, width, height) {
 	ctx.lineTo(x + size, y + size - lineLen);
 	ctx.stroke();
 
-	// Top-Right HUD Badge on Canvas (Progress, bps, State)
+	// Top-Right HUD Badge on Canvas
 	const totalStr = latestFrameEvent.totalCount === -1 ? "N" : latestFrameEvent.totalCount;
 	const pendingStr = latestFrameEvent.pendingCount <= 0 ? "" : `(${latestFrameEvent.pendingCount})`;
 	const progressText = `Progress: ${latestFrameEvent.validCount}${pendingStr}/${totalStr}`;
 	const bpsText = `Speed: ${latestFrameEvent.bps} bps`;
 	const stateText = `State: ${transport.getState()}`;
 
-	const badgeWidth = 170;
-	const badgeHeight = 62;
+	const badgeWidth = 160;
+	const badgeHeight = 58;
 	const badgeX = width - badgeWidth - 10;
 	const badgeY = 10;
 
@@ -214,15 +248,15 @@ function drawCameraOverlay(ctx, width, height) {
 	ctx.fill();
 
 	ctx.fillStyle = "#f8fafc";
-	ctx.font = "bold 12px sans-serif";
-	ctx.fillText(progressText, badgeX + 8, badgeY + 18);
+	ctx.font = "bold 11px sans-serif";
+	ctx.fillText(progressText, badgeX + 8, badgeY + 16);
 
 	ctx.fillStyle = "#38bdf8";
-	ctx.fillText(bpsText, badgeX + 8, badgeY + 36);
+	ctx.fillText(bpsText, badgeX + 8, badgeY + 34);
 
 	ctx.fillStyle = "#cbd5e1";
-	ctx.font = "11px sans-serif";
-	ctx.fillText(stateText, badgeX + 8, badgeY + 52);
+	ctx.font = "10px sans-serif";
+	ctx.fillText(stateText, badgeX + 8, badgeY + 50);
 
 	ctx.restore();
 }
@@ -246,14 +280,20 @@ btnStartSend.addEventListener("click", async () => {
 			payload = new Uint8Array(await file.arrayBuffer());
 		}
 
+		const dims = computeOptimalCanvasDimensions("qr-canvas");
+
 		await transport.startSend(payload, {
 			qrVersion,
 			ecLevel,
 			intervalMs,
 			canvas: "qr-canvas",
+			renderOptions: {
+				width: dims.width,
+				height: dims.height,
+			},
 		});
 
-		log(`Started sending payload (${inputType}).`);
+		log(`Started sending payload (${inputType}, V${qrVersion}, ${dims.width}x${dims.height}px).`);
 	} catch (err) {
 		log(`Failed to start sender: ${String(err)}`);
 	}
@@ -289,8 +329,8 @@ populateCameraDevices();
 
 btnStartReceive.addEventListener("click", async () => {
 	try {
-		if (receivedDataContainer) {
-			receivedDataContainer.style.display = "none";
+		if (receivedDataModal) {
+			receivedDataModal.style.display = "none";
 		}
 
 		const maxConsecutiveCrcErrors = Number(maxCrcErrorsInput.value);
@@ -314,6 +354,7 @@ btnStartReceive.addEventListener("click", async () => {
 			},
 			{
 				previewCanvas: "camera-canvas",
+				fps: 60,
 				facingMode,
 				deviceId,
 				drawOverlay: drawCameraOverlay,
