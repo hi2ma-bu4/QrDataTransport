@@ -14,15 +14,22 @@ use bindings::exports::snows::qr_data_transport::protocol::{
 };
 use decoder::{DecodedData, decode_data};
 use encoder::{InputData, encode_data};
-use frame::{DecodeContext, decode_frame, parse_frame_metadata};
+use frame::{DecodeContext, ParityMode, decode_frame, parse_frame_metadata};
 use qrcodegen::{QrCode, QrCodeEcc, QrSegment, Version};
 use rxing::{BinaryBitmap, MultiFormatReader, RGBLuminanceSource, Reader};
 
 struct Component;
 
 /// Helper function to encode `InputData` into `EncodeResult`.
-fn encode_input(input: InputData, max_frame_bits: u32) -> Result<EncodeResult, String> {
-    let output = encode_data(input, max_frame_bits as usize).map_err(|e| e.to_string())?;
+fn encode_input(
+    input: InputData,
+    max_frame_bits: u32,
+    parity_mode_raw: u8,
+) -> Result<EncodeResult, String> {
+    let parity_mode = ParityMode::from_u8(parity_mode_raw).map_err(|e| e.to_string())?;
+
+    let output =
+        encode_data(input, max_frame_bits as usize, parity_mode).map_err(|e| e.to_string())?;
 
     let total_qr_count = output.frames.len() as u32;
     let frames = output
@@ -40,28 +47,43 @@ fn encode_input(input: InputData, max_frame_bits: u32) -> Result<EncodeResult, S
 }
 
 impl Guest for Component {
-    fn encode_bytes(data: Vec<u8>, max_frame_bits: u32) -> Result<EncodeResult, String> {
-        encode_input(InputData::Uint8Array(&data), max_frame_bits)
+    fn encode_bytes(
+        data: Vec<u8>,
+        max_frame_bits: u32,
+        parity_mode: u8,
+    ) -> Result<EncodeResult, String> {
+        encode_input(InputData::Uint8Array(&data), max_frame_bits, parity_mode)
     }
 
-    fn encode_text(text: String, max_frame_bits: u32) -> Result<EncodeResult, String> {
-        encode_input(InputData::String(&text), max_frame_bits)
+    fn encode_text(
+        text: String,
+        max_frame_bits: u32,
+        parity_mode: u8,
+    ) -> Result<EncodeResult, String> {
+        encode_input(InputData::String(&text), max_frame_bits, parity_mode)
     }
 
     fn parse_frame(
         wire_bytes: Vec<u8>,
         known_total_qr_count: Option<u32>,
         known_first_frame_crc: Option<u16>,
+        known_parity_mode: Option<u8>,
     ) -> Result<FrameMetadata, String> {
+        let parsed_parity_mode = match known_parity_mode {
+            Some(pm) => Some(ParityMode::from_u8(pm).map_err(|e| e.to_string())?),
+            None => None,
+        };
+
         // Parse metadata
-        let raw_meta =
-            parse_frame_metadata(&wire_bytes, known_total_qr_count).map_err(|e| e.to_string())?;
+        let raw_meta = parse_frame_metadata(&wire_bytes, known_total_qr_count, parsed_parity_mode)
+            .map_err(|e| e.to_string())?;
 
         // Perform full frame decoding to verify frame CRC
         let ctx = if known_total_qr_count.is_some() || known_first_frame_crc.is_some() {
             Some(DecodeContext {
                 total_qr_count: known_total_qr_count,
                 first_frame_crc: known_first_frame_crc,
+                parity_mode: parsed_parity_mode.or(raw_meta.parity_mode),
             })
         } else {
             None
@@ -80,11 +102,15 @@ impl Guest for Component {
             frame::DataType::String => DataType::BytesString,
         });
 
+        let pm_u8 = raw_meta.parity_mode.map(|m| m.to_wire_bits());
+
         Ok(FrameMetadata {
             is_first: raw_meta.is_first,
+            is_parity: raw_meta.is_parity,
             version: raw_meta.version.unwrap_or(0),
             total_qr_count: raw_meta.total_qr_count.unwrap_or(0),
             frame_number: raw_meta.frame_number,
+            parity_mode: pm_u8,
             data_type,
             payload_bit_len: raw_meta.payload_bit_len as u32,
             frame_crc,
@@ -102,17 +128,10 @@ impl Guest for Component {
         let first_frame = decode_frame(&wire_frames[0], None).map_err(|e| e.to_string())?;
         let first_frame_crc = first_frame.frame_crc();
         let total_qr_count = first_frame.total_qr_count();
+        let parity_mode = first_frame.parity_mode();
 
         if first_frame.frame_number() != 0 {
             return Err("First frame must have frame_number 0".to_string());
-        }
-
-        if wire_frames.len() != total_qr_count as usize {
-            return Err(format!(
-                "Incomplete or mismatched frame set: expected {} frames, got {}",
-                total_qr_count,
-                wire_frames.len()
-            ));
         }
 
         let mut parsed_frames = Vec::with_capacity(wire_frames.len());
@@ -122,6 +141,7 @@ impl Guest for Component {
             let ctx = DecodeContext {
                 total_qr_count: Some(total_qr_count),
                 first_frame_crc: Some(first_frame_crc),
+                parity_mode,
             };
             let frame = decode_frame(wire, Some(&ctx)).map_err(|e| e.to_string())?;
 
@@ -164,7 +184,6 @@ impl Guest for Component {
             let ver = Version::new(qr_version);
             QrCode::encode_segments_advanced(&segs, ecl, ver, ver, None, false)
         } else {
-            // Default to Version 5 or auto-fit if 0 / invalid
             let min_ver = Version::new(1);
             let max_ver = Version::new(40);
             QrCode::encode_segments_advanced(&segs, ecl, min_ver, max_ver, None, false)

@@ -1,6 +1,13 @@
 import { calculateMaxFrameBits } from "../utils/qrCapacity";
 import type { QrEcLevel } from "../wasm/interfaces/snows-qr-data-transport-protocol";
 
+export enum ParityMode {
+	None = 0,
+	Group8 = 8,
+	Group16 = 16,
+	Group32 = 32,
+}
+
 export interface TransportConfigOptions {
 	maxConsecutiveCrcErrors?: number;
 	maxPendingFramesBeforeFirst?: number;
@@ -19,7 +26,7 @@ export class TransportConfig {
 
 	/**
 	 * Maximum number of pending frame byte arrays saved before receiving First QR.
-	 * Default: 32.
+	 * Default: 256.
 	 */
 	public maxPendingFramesBeforeFirst: number;
 
@@ -42,7 +49,7 @@ export class TransportConfig {
 		}
 		this.maxConsecutiveCrcErrors = crcMax;
 
-		const pendingMax = options?.maxPendingFramesBeforeFirst ?? 32;
+		const pendingMax = options?.maxPendingFramesBeforeFirst ?? 256;
 		if (pendingMax < 0) {
 			throw new Error("maxPendingFramesBeforeFirst must be non-negative");
 		}
@@ -65,6 +72,7 @@ export class TransportConfig {
 export interface DataConfigOptions {
 	qrVersion?: number;
 	ecLevel?: QrEcLevel;
+	parityMode?: ParityMode | 0 | 8 | 16 | 32;
 }
 
 export class DataConfig {
@@ -80,6 +88,12 @@ export class DataConfig {
 	 */
 	public ecLevel: QrEcLevel;
 
+	/**
+	 * Parity Mode (0, 8, 16, 32).
+	 * Default: ParityMode.None (0).
+	 */
+	public parityMode: ParityMode;
+
 	constructor(options?: DataConfigOptions) {
 		const ver = options?.qrVersion ?? 5;
 		if (ver < 1 || ver > 40) {
@@ -92,6 +106,12 @@ export class DataConfig {
 			throw new Error("ecLevel must be one of 'l', 'm', 'q', 'h'");
 		}
 		this.ecLevel = ec;
+
+		const pm = options?.parityMode ?? ParityMode.None;
+		if (![0, 8, 16, 32].includes(pm)) {
+			throw new Error("parityMode must be 0, 8, 16, or 32");
+		}
+		this.parityMode = pm as ParityMode;
 	}
 
 	/**
@@ -105,6 +125,7 @@ export class DataConfig {
 		return new DataConfig({
 			qrVersion: this.qrVersion,
 			ecLevel: this.ecLevel,
+			parityMode: this.parityMode,
 		});
 	}
 }

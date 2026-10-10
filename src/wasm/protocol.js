@@ -6879,7 +6879,7 @@ let postReturn4;
 let postReturn4Async;
 let protocolEncodeBytes;
 
-function encodeBytes(arg0, arg1) {
+function encodeBytes(arg0, arg1, arg2) {
   
   const hostProvided = false;
   getOrCreateAsyncState(0).throwIfTrapped();
@@ -6936,7 +6936,7 @@ function encodeBytes(arg0, arg1) {
         
         _debugLog('[iface="snows:qr-data-transport/protocol", function="encode-bytes"][Instruction::CallWasm] enter', {
           funcName: 'encode-bytes',
-          paramCount: 3,
+          paramCount: 4,
           async: false,
           postReturn: true,
         });
@@ -6947,7 +6947,7 @@ function encodeBytes(arg0, arg1) {
           ret =  _withGlobalCurrentTaskMeta({
             taskID: task.id(),
             componentIdx: task.componentIdx(),
-            fn: () => protocolEncodeBytes(ptr0, len0, toUint32(arg1)),
+            fn: () => protocolEncodeBytes(ptr0, len0, toUint32(arg1), toUint8(arg2)),
           });
         } catch (err) {
           
@@ -7041,7 +7041,7 @@ function encodeBytes(arg0, arg1) {
 }
 let protocolEncodeText;
 
-function encodeText(arg0, arg1) {
+function encodeText(arg0, arg1, arg2) {
   
   const hostProvided = false;
   getOrCreateAsyncState(0).throwIfTrapped();
@@ -7081,7 +7081,7 @@ function encodeText(arg0, arg1) {
         
         _debugLog('[iface="snows:qr-data-transport/protocol", function="encode-text"][Instruction::CallWasm] enter', {
           funcName: 'encode-text',
-          paramCount: 3,
+          paramCount: 4,
           async: false,
           postReturn: true,
         });
@@ -7092,7 +7092,7 @@ function encodeText(arg0, arg1) {
           ret =  _withGlobalCurrentTaskMeta({
             taskID: task.id(),
             componentIdx: task.componentIdx(),
-            fn: () => protocolEncodeText(ptr0, len0, toUint32(arg1)),
+            fn: () => protocolEncodeText(ptr0, len0, toUint32(arg1), toUint8(arg2)),
           });
         } catch (err) {
           
@@ -7186,7 +7186,7 @@ function encodeText(arg0, arg1) {
 }
 let protocolParseFrame;
 
-function parseFrame(arg0, arg1, arg2) {
+function parseFrame(arg0, arg1, arg2, arg3) {
   
   const hostProvided = false;
   getOrCreateAsyncState(0).throwIfTrapped();
@@ -7263,9 +7263,20 @@ function parseFrame(arg0, arg1, arg2) {
           variant2_0 = 1;
           variant2_1 = toUint16(e);
         }
+        var variant3 = arg3;
+        let variant3_0;
+        let variant3_1;
+        if (variant3 === null || variant3=== undefined) {
+          variant3_0 = 0;
+          variant3_1 = 0;
+        } else {
+          const e = variant3;
+          variant3_0 = 1;
+          variant3_1 = toUint8(e);
+        }
         _debugLog('[iface="snows:qr-data-transport/protocol", function="parse-frame"][Instruction::CallWasm] enter', {
           funcName: 'parse-frame',
-          paramCount: 6,
+          paramCount: 8,
           async: false,
           postReturn: true,
         });
@@ -7276,7 +7287,7 @@ function parseFrame(arg0, arg1, arg2) {
           ret =  _withGlobalCurrentTaskMeta({
             taskID: task.id(),
             componentIdx: task.componentIdx(),
-            fn: () => protocolParseFrame(ptr0, len0, variant1_0, variant1_1, variant2_0, variant2_1),
+            fn: () => protocolParseFrame(ptr0, len0, variant1_0, variant1_1, variant2_0, variant2_1, variant3_0, variant3_1),
           });
         } catch (err) {
           
@@ -7292,76 +7303,93 @@ function parseFrame(arg0, arg1, arg2) {
           
         }
         
-        let variant9;
+        let variant12;
         switch (dataView(memory0).getUint8(ret + 0, true)) {
           case 0: {
-            var bool3 = dataView(memory0).getUint8(ret + 4, true);
-            let variant5;
+            var bool4 = dataView(memory0).getUint8(ret + 4, true);
+            var bool5 = dataView(memory0).getUint8(ret + 5, true);
+            let variant6;
             switch (dataView(memory0).getUint8(ret + 16, true)) {
               case 0: {
-                variant5 = undefined;
+                variant6 = undefined;
                 break;
               }
               case 1: {
-                let enum4;
-                switch (dataView(memory0).getUint8(ret + 17, true)) {
+                variant6 = clampGuest(dataView(memory0).getUint8(ret + 17, true), 0, 255);
+                break;
+              }
+              default: {
+                throw new TypeError('invalid variant discriminant for option');
+              }
+            }
+            let variant8;
+            switch (dataView(memory0).getUint8(ret + 18, true)) {
+              case 0: {
+                variant8 = undefined;
+                break;
+              }
+              case 1: {
+                let enum7;
+                switch (dataView(memory0).getUint8(ret + 19, true)) {
                   case 0: {
-                    enum4 = 'uint8array';
+                    enum7 = 'uint8array';
                     break;
                   }
                   case 1: {
-                    enum4 = 'bytes-string';
+                    enum7 = 'bytes-string';
                     break;
                   }
                   default: {
                     throw new TypeError('invalid discriminant specified for DataType');
                   }
                 }
-                variant5 = enum4;
+                variant8 = enum7;
                 break;
               }
               default: {
                 throw new TypeError('invalid variant discriminant for option');
               }
             }
-            let variant6;
+            let variant9;
             switch (dataView(memory0).getUint8(ret + 28, true)) {
               case 0: {
-                variant6 = undefined;
+                variant9 = undefined;
                 break;
               }
               case 1: {
-                variant6 = dataView(memory0).getInt32(ret + 32, true) >>> 0;
+                variant9 = dataView(memory0).getInt32(ret + 32, true) >>> 0;
                 break;
               }
               default: {
                 throw new TypeError('invalid variant discriminant for option');
               }
             }
-            var bool7 = dataView(memory0).getUint8(ret + 36, true);
-            variant9= {
+            var bool10 = dataView(memory0).getUint8(ret + 36, true);
+            variant12= {
               tag: 'ok',
               val: {
-                isFirst: bool3 == 0 ? false : (bool3 == 1 ? true : throwInvalidBool()),
-                version: clampGuest(dataView(memory0).getUint8(ret + 5, true), 0, 255),
+                isFirst: bool4 == 0 ? false : (bool4 == 1 ? true : throwInvalidBool()),
+                isParity: bool5 == 0 ? false : (bool5 == 1 ? true : throwInvalidBool()),
+                version: clampGuest(dataView(memory0).getUint8(ret + 6, true), 0, 255),
                 totalQrCount: dataView(memory0).getInt32(ret + 8, true) >>> 0,
                 frameNumber: dataView(memory0).getInt32(ret + 12, true) >>> 0,
-                dataType: variant5,
+                parityMode: variant6,
+                dataType: variant8,
                 payloadBitLen: dataView(memory0).getInt32(ret + 20, true) >>> 0,
                 frameCrc: clampGuest(dataView(memory0).getUint16(ret + 24, true), 0, 65535),
-                overallCrc: variant6,
-                crcValid: bool7 == 0 ? false : (bool7 == 1 ? true : throwInvalidBool()),
+                overallCrc: variant9,
+                crcValid: bool10 == 0 ? false : (bool10 == 1 ? true : throwInvalidBool()),
               }
             };
             break;
           }
           case 1: {
-            var ptr8 = dataView(memory0).getUint32(ret + 4, true);
-            var len8 = dataView(memory0).getUint32(ret + 8, true);
-            var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
-            variant9= {
+            var ptr11 = dataView(memory0).getUint32(ret + 4, true);
+            var len11 = dataView(memory0).getUint32(ret + 8, true);
+            var result11 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr11, len11));
+            variant12= {
               tag: 'err',
-              val: result8
+              val: result11
             };
             break;
           }
@@ -7375,7 +7403,7 @@ function parseFrame(arg0, arg1, arg2) {
           async: false,
           postReturn: true
         });
-        const retCopy = variant9;
+        const retCopy = variant12;
         task.resolve([retCopy.val]);
         
         let cstate = getOrCreateAsyncState(0);

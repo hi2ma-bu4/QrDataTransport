@@ -1,7 +1,7 @@
 /** @module Interface snows:qr-data-transport/protocol **/
-declare function encodeBytes(data: Uint8Array, maxFrameBits: number): EncodeResult;
-declare function encodeText(text: string, maxFrameBits: number): EncodeResult;
-declare function parseFrame(wireBytes: Uint8Array, knownTotalQrCount: number | undefined, knownFirstFrameCrc: number | undefined): FrameMetadata;
+declare function encodeBytes(data: Uint8Array, maxFrameBits: number, parityMode: number): EncodeResult;
+declare function encodeText(text: string, maxFrameBits: number, parityMode: number): EncodeResult;
+declare function parseFrame(wireBytes: Uint8Array, knownTotalQrCount: number | undefined, knownFirstFrameCrc: number | undefined, knownParityMode: number | undefined): FrameMetadata;
 declare function decodeFrames(wireFrames: Array<Uint8Array>): DecodedPayload;
 declare function generateQrMatrix(wireBytes: Uint8Array, qrVersion: number, ecLevel: QrEcLevel): QrModuleMatrix;
 declare function decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Uint8Array;
@@ -35,9 +35,11 @@ type StringMode = 'ascii' | 'utf8';
 type QrEcLevel = 'l' | 'm' | 'q' | 'h';
 interface FrameMetadata {
   isFirst: boolean,
+  isParity: boolean,
   version: number,
   totalQrCount: number,
   frameNumber: number,
+  parityMode?: number,
   dataType?: DataType,
   payloadBitLen: number,
   frameCrc: number,
@@ -144,16 +146,16 @@ declare class DataApi {
      * Encodes raw bytes into wire frames using WASM protocol core.
      * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
      */
-    static encodeBytes(data: Uint8Array, qrVersion?: number, ecLevel?: QrEcLevel): EncodeResult;
+    static encodeBytes(data: Uint8Array, qrVersion?: number, ecLevel?: QrEcLevel, parityMode?: number): EncodeResult;
     /**
      * Encodes text into wire frames using WASM protocol core.
      * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
      */
-    static encodeText(text: string, qrVersion?: number, ecLevel?: QrEcLevel): EncodeResult;
+    static encodeText(text: string, qrVersion?: number, ecLevel?: QrEcLevel, parityMode?: number): EncodeResult;
     /**
      * Parses a single wire frame and verifies its CRC.
      */
-    static parseFrame(wireBytes: Uint8Array, knownTotalQrCount?: number, knownFirstFrameCrc?: number): FrameMetadata;
+    static parseFrame(wireBytes: Uint8Array, knownTotalQrCount?: number, knownFirstFrameCrc?: number, knownParityMode?: number): FrameMetadata;
     /**
      * Decodes a complete list of wire frames and returns the payload along with its type.
      * Returns { type: "Uint8Array" | "string", data: Uint8Array | string } according to Spec v8.
@@ -169,6 +171,12 @@ declare class DataApi {
     static decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Uint8Array;
 }
 
+declare enum ParityMode {
+    None = 0,
+    Group8 = 8,
+    Group16 = 16,
+    Group32 = 32
+}
 interface TransportConfigOptions {
     maxConsecutiveCrcErrors?: number;
     maxPendingFramesBeforeFirst?: number;
@@ -185,7 +193,7 @@ declare class TransportConfig {
     maxConsecutiveCrcErrors: number;
     /**
      * Maximum number of pending frame byte arrays saved before receiving First QR.
-     * Default: 32.
+     * Default: 256.
      */
     maxPendingFramesBeforeFirst: number;
     /**
@@ -204,6 +212,7 @@ declare class TransportConfig {
 interface DataConfigOptions {
     qrVersion?: number;
     ecLevel?: QrEcLevel;
+    parityMode?: ParityMode | 0 | 8 | 16 | 32;
 }
 declare class DataConfig {
     /**
@@ -216,6 +225,11 @@ declare class DataConfig {
      * Default: 'm'.
      */
     ecLevel: QrEcLevel;
+    /**
+     * Parity Mode (0, 8, 16, 32).
+     * Default: ParityMode.None (0).
+     */
+    parityMode: ParityMode;
     constructor(options?: DataConfigOptions);
     /**
      * Maximum total bits per wire frame calculated automatically from qrVersion and ecLevel.
@@ -278,6 +292,7 @@ interface SendOptions {
     qrVersion?: number;
     ecLevel?: "l" | "m" | "q" | "h";
     intervalMs?: number;
+    parityMode?: ParityMode | 0 | 8 | 16 | 32;
     canvas?: HTMLCanvasElement | string;
     renderOptions?: RenderQrOptions;
 }

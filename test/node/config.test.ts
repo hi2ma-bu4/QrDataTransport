@@ -6,7 +6,7 @@ import { calculateMaxFrameBits } from "../../src/utils/qrCapacity";
 test("TransportConfig default values", () => {
 	const config = new TransportConfig();
 	assert.equal(config.maxConsecutiveCrcErrors, 16);
-	assert.equal(config.maxPendingFramesBeforeFirst, 32);
+	assert.equal(config.maxPendingFramesBeforeFirst, 256);
 	assert.equal(config.useWorker, true);
 	assert.equal(config.intervalMs, 100);
 });

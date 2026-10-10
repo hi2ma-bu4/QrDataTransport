@@ -24,27 +24,27 @@ export class DataApi {
 	 * Encodes raw bytes into wire frames using WASM protocol core.
 	 * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
 	 */
-	static encodeBytes(data: Uint8Array, qrVersion: number = 5, ecLevel: QrEcLevel = "m"): EncodeResult {
+	static encodeBytes(data: Uint8Array, qrVersion: number = 5, ecLevel: QrEcLevel = "m", parityMode: number = 0): EncodeResult {
 		const bytes = ensureSharedUint8Array(data);
 		const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
-		return protocol.encodeBytes(bytes, maxFrameBits);
+		return protocol.encodeBytes(bytes, maxFrameBits, parityMode);
 	}
 
 	/**
 	 * Encodes text into wire frames using WASM protocol core.
 	 * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
 	 */
-	static encodeText(text: string, qrVersion: number = 5, ecLevel: QrEcLevel = "m"): EncodeResult {
+	static encodeText(text: string, qrVersion: number = 5, ecLevel: QrEcLevel = "m", parityMode: number = 0): EncodeResult {
 		const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
-		return protocol.encodeText(text, maxFrameBits);
+		return protocol.encodeText(text, maxFrameBits, parityMode);
 	}
 
 	/**
 	 * Parses a single wire frame and verifies its CRC.
 	 */
-	static parseFrame(wireBytes: Uint8Array, knownTotalQrCount?: number, knownFirstFrameCrc?: number): FrameMetadata {
+	static parseFrame(wireBytes: Uint8Array, knownTotalQrCount?: number, knownFirstFrameCrc?: number, knownParityMode?: number): FrameMetadata {
 		const bytes = ensureSharedUint8Array(wireBytes);
-		return protocol.parseFrame(bytes, knownTotalQrCount, knownFirstFrameCrc);
+		return protocol.parseFrame(bytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode);
 	}
 
 	/**

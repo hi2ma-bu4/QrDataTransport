@@ -7437,7 +7437,7 @@ var postReturn3Async;
 var postReturn4;
 var postReturn4Async;
 var protocolEncodeBytes;
-function encodeBytes(arg0, arg1) {
+function encodeBytes(arg0, arg1, arg2) {
   const hostProvided = false;
   getOrCreateAsyncState(0).throwIfTrapped();
   const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
@@ -7483,7 +7483,7 @@ function encodeBytes(arg0, arg1) {
         }
         _debugLog('[iface="snows:qr-data-transport/protocol", function="encode-bytes"][Instruction::CallWasm] enter', {
           funcName: "encode-bytes",
-          paramCount: 3,
+          paramCount: 4,
           async: false,
           postReturn: true
         });
@@ -7492,7 +7492,7 @@ function encodeBytes(arg0, arg1) {
           ret = _withGlobalCurrentTaskMeta({
             taskID: task.id(),
             componentIdx: task.componentIdx(),
-            fn: () => protocolEncodeBytes(ptr0, len0, toUint32(arg1))
+            fn: () => protocolEncodeBytes(ptr0, len0, toUint32(arg1), toUint8(arg2))
           });
         } catch (err) {
           _debugLog("[Instruction::CallWasm] error during sync call", {
@@ -7577,7 +7577,7 @@ function encodeBytes(arg0, arg1) {
   });
 }
 var protocolEncodeText;
-function encodeText(arg0, arg1) {
+function encodeText(arg0, arg1, arg2) {
   const hostProvided = false;
   getOrCreateAsyncState(0).throwIfTrapped();
   const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
@@ -7608,7 +7608,7 @@ function encodeText(arg0, arg1) {
         var len0 = encodeRes.len;
         _debugLog('[iface="snows:qr-data-transport/protocol", function="encode-text"][Instruction::CallWasm] enter', {
           funcName: "encode-text",
-          paramCount: 3,
+          paramCount: 4,
           async: false,
           postReturn: true
         });
@@ -7617,7 +7617,7 @@ function encodeText(arg0, arg1) {
           ret = _withGlobalCurrentTaskMeta({
             taskID: task.id(),
             componentIdx: task.componentIdx(),
-            fn: () => protocolEncodeText(ptr0, len0, toUint32(arg1))
+            fn: () => protocolEncodeText(ptr0, len0, toUint32(arg1), toUint8(arg2))
           });
         } catch (err) {
           _debugLog("[Instruction::CallWasm] error during sync call", {
@@ -7702,7 +7702,7 @@ function encodeText(arg0, arg1) {
   });
 }
 var protocolParseFrame;
-function parseFrame(arg0, arg1, arg2) {
+function parseFrame(arg0, arg1, arg2, arg3) {
   const hostProvided = false;
   getOrCreateAsyncState(0).throwIfTrapped();
   const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
@@ -7768,9 +7768,20 @@ function parseFrame(arg0, arg1, arg2) {
           variant2_0 = 1;
           variant2_1 = toUint16(e);
         }
+        var variant3 = arg3;
+        let variant3_0;
+        let variant3_1;
+        if (variant3 === null || variant3 === void 0) {
+          variant3_0 = 0;
+          variant3_1 = 0;
+        } else {
+          const e = variant3;
+          variant3_0 = 1;
+          variant3_1 = toUint8(e);
+        }
         _debugLog('[iface="snows:qr-data-transport/protocol", function="parse-frame"][Instruction::CallWasm] enter', {
           funcName: "parse-frame",
-          paramCount: 6,
+          paramCount: 8,
           async: false,
           postReturn: true
         });
@@ -7779,7 +7790,7 @@ function parseFrame(arg0, arg1, arg2) {
           ret = _withGlobalCurrentTaskMeta({
             taskID: task.id(),
             componentIdx: task.componentIdx(),
-            fn: () => protocolParseFrame(ptr0, len0, variant1_0, variant1_1, variant2_0, variant2_1)
+            fn: () => protocolParseFrame(ptr0, len0, variant1_0, variant1_1, variant2_0, variant2_1, variant3_0, variant3_1)
           });
         } catch (err) {
           _debugLog("[Instruction::CallWasm] error during sync call", {
@@ -7792,76 +7803,93 @@ function parseFrame(arg0, arg1, arg2) {
           task.exit();
           throw err;
         }
-        let variant9;
+        let variant12;
         switch (dataView(memory0).getUint8(ret + 0, true)) {
           case 0: {
-            var bool3 = dataView(memory0).getUint8(ret + 4, true);
-            let variant5;
+            var bool4 = dataView(memory0).getUint8(ret + 4, true);
+            var bool5 = dataView(memory0).getUint8(ret + 5, true);
+            let variant6;
             switch (dataView(memory0).getUint8(ret + 16, true)) {
               case 0: {
-                variant5 = void 0;
+                variant6 = void 0;
                 break;
               }
               case 1: {
-                let enum4;
-                switch (dataView(memory0).getUint8(ret + 17, true)) {
+                variant6 = clampGuest(dataView(memory0).getUint8(ret + 17, true), 0, 255);
+                break;
+              }
+              default: {
+                throw new TypeError("invalid variant discriminant for option");
+              }
+            }
+            let variant8;
+            switch (dataView(memory0).getUint8(ret + 18, true)) {
+              case 0: {
+                variant8 = void 0;
+                break;
+              }
+              case 1: {
+                let enum7;
+                switch (dataView(memory0).getUint8(ret + 19, true)) {
                   case 0: {
-                    enum4 = "uint8array";
+                    enum7 = "uint8array";
                     break;
                   }
                   case 1: {
-                    enum4 = "bytes-string";
+                    enum7 = "bytes-string";
                     break;
                   }
                   default: {
                     throw new TypeError("invalid discriminant specified for DataType");
                   }
                 }
-                variant5 = enum4;
+                variant8 = enum7;
                 break;
               }
               default: {
                 throw new TypeError("invalid variant discriminant for option");
               }
             }
-            let variant6;
+            let variant9;
             switch (dataView(memory0).getUint8(ret + 28, true)) {
               case 0: {
-                variant6 = void 0;
+                variant9 = void 0;
                 break;
               }
               case 1: {
-                variant6 = dataView(memory0).getInt32(ret + 32, true) >>> 0;
+                variant9 = dataView(memory0).getInt32(ret + 32, true) >>> 0;
                 break;
               }
               default: {
                 throw new TypeError("invalid variant discriminant for option");
               }
             }
-            var bool7 = dataView(memory0).getUint8(ret + 36, true);
-            variant9 = {
+            var bool10 = dataView(memory0).getUint8(ret + 36, true);
+            variant12 = {
               tag: "ok",
               val: {
-                isFirst: bool3 == 0 ? false : bool3 == 1 ? true : throwInvalidBool(),
-                version: clampGuest(dataView(memory0).getUint8(ret + 5, true), 0, 255),
+                isFirst: bool4 == 0 ? false : bool4 == 1 ? true : throwInvalidBool(),
+                isParity: bool5 == 0 ? false : bool5 == 1 ? true : throwInvalidBool(),
+                version: clampGuest(dataView(memory0).getUint8(ret + 6, true), 0, 255),
                 totalQrCount: dataView(memory0).getInt32(ret + 8, true) >>> 0,
                 frameNumber: dataView(memory0).getInt32(ret + 12, true) >>> 0,
-                dataType: variant5,
+                parityMode: variant6,
+                dataType: variant8,
                 payloadBitLen: dataView(memory0).getInt32(ret + 20, true) >>> 0,
                 frameCrc: clampGuest(dataView(memory0).getUint16(ret + 24, true), 0, 65535),
-                overallCrc: variant6,
-                crcValid: bool7 == 0 ? false : bool7 == 1 ? true : throwInvalidBool()
+                overallCrc: variant9,
+                crcValid: bool10 == 0 ? false : bool10 == 1 ? true : throwInvalidBool()
               }
             };
             break;
           }
           case 1: {
-            var ptr8 = dataView(memory0).getUint32(ret + 4, true);
-            var len8 = dataView(memory0).getUint32(ret + 8, true);
-            var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
-            variant9 = {
+            var ptr11 = dataView(memory0).getUint32(ret + 4, true);
+            var len11 = dataView(memory0).getUint32(ret + 8, true);
+            var result11 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr11, len11));
+            variant12 = {
               tag: "err",
-              val: result8
+              val: result11
             };
             break;
           }
@@ -7875,7 +7903,7 @@ function parseFrame(arg0, arg1, arg2) {
           async: false,
           postReturn: true
         });
-        const retCopy = variant9;
+        const retCopy = variant12;
         task.resolve([retCopy.val]);
         let cstate = getOrCreateAsyncState(0);
         cstate.mayLeave = false;
@@ -10418,25 +10446,25 @@ var DataApi = class {
    * Encodes raw bytes into wire frames using WASM protocol core.
    * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
    */
-  static encodeBytes(data, qrVersion = 5, ecLevel = "m") {
+  static encodeBytes(data, qrVersion = 5, ecLevel = "m", parityMode = 0) {
     const bytes = ensureSharedUint8Array(data);
     const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
-    return protocol.encodeBytes(bytes, maxFrameBits);
+    return protocol.encodeBytes(bytes, maxFrameBits, parityMode);
   }
   /**
    * Encodes text into wire frames using WASM protocol core.
    * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
    */
-  static encodeText(text, qrVersion = 5, ecLevel = "m") {
+  static encodeText(text, qrVersion = 5, ecLevel = "m", parityMode = 0) {
     const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
-    return protocol.encodeText(text, maxFrameBits);
+    return protocol.encodeText(text, maxFrameBits, parityMode);
   }
   /**
    * Parses a single wire frame and verifies its CRC.
    */
-  static parseFrame(wireBytes, knownTotalQrCount, knownFirstFrameCrc) {
+  static parseFrame(wireBytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode) {
     const bytes = ensureSharedUint8Array(wireBytes);
-    return protocol.parseFrame(bytes, knownTotalQrCount, knownFirstFrameCrc);
+    return protocol.parseFrame(bytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode);
   }
   /**
    * Decodes a complete list of wire frames and returns the payload along with its type.
@@ -10486,7 +10514,7 @@ var TransportConfig = class _TransportConfig {
   maxConsecutiveCrcErrors;
   /**
    * Maximum number of pending frame byte arrays saved before receiving First QR.
-   * Default: 32.
+   * Default: 256.
    */
   maxPendingFramesBeforeFirst;
   /**
@@ -10505,7 +10533,7 @@ var TransportConfig = class _TransportConfig {
       throw new Error("maxConsecutiveCrcErrors must be non-negative");
     }
     this.maxConsecutiveCrcErrors = crcMax;
-    const pendingMax = options?.maxPendingFramesBeforeFirst ?? 32;
+    const pendingMax = options?.maxPendingFramesBeforeFirst ?? 256;
     if (pendingMax < 0) {
       throw new Error("maxPendingFramesBeforeFirst must be non-negative");
     }
@@ -10533,6 +10561,11 @@ var DataConfig = class _DataConfig {
    * Default: 'm'.
    */
   ecLevel;
+  /**
+   * Parity Mode (0, 8, 16, 32).
+   * Default: ParityMode.None (0).
+   */
+  parityMode;
   constructor(options) {
     const ver = options?.qrVersion ?? 5;
     if (ver < 1 || ver > 40) {
@@ -10544,6 +10577,11 @@ var DataConfig = class _DataConfig {
       throw new Error("ecLevel must be one of 'l', 'm', 'q', 'h'");
     }
     this.ecLevel = ec;
+    const pm = options?.parityMode ?? 0 /* None */;
+    if (![0, 8, 16, 32].includes(pm)) {
+      throw new Error("parityMode must be 0, 8, 16, or 32");
+    }
+    this.parityMode = pm;
   }
   /**
    * Maximum total bits per wire frame calculated automatically from qrVersion and ecLevel.
@@ -10554,7 +10592,8 @@ var DataConfig = class _DataConfig {
   clone() {
     return new _DataConfig({
       qrVersion: this.qrVersion,
-      ecLevel: this.ecLevel
+      ecLevel: this.ecLevel,
+      parityMode: this.parityMode
     });
   }
 };
@@ -10739,6 +10778,9 @@ var TransportApi = class {
       if (options.intervalMs !== void 0) {
         this.config.transport.intervalMs = options.intervalMs;
       }
+      if (options.parityMode !== void 0) {
+        this.config.data.parityMode = options.parityMode;
+      }
       if (options.canvas !== void 0) {
         this.sendCanvasTarget = options.canvas;
       }
@@ -10746,9 +10788,9 @@ var TransportApi = class {
     let encodedResult;
     try {
       if (typeof data === "string") {
-        encodedResult = DataApi.encodeText(data, this.config.data.qrVersion, this.config.data.ecLevel);
+        encodedResult = DataApi.encodeText(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
       } else {
-        encodedResult = DataApi.encodeBytes(data, this.config.data.qrVersion, this.config.data.ecLevel);
+        encodedResult = DataApi.encodeBytes(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);

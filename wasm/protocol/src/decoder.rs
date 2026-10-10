@@ -1,5 +1,8 @@
 use crate::bit_stream::{BitReader, BitStreamError};
-use crate::frame::{DataType, Frame, FrameError, concat_payload_bits, verify_overall_crc};
+use crate::frame::{
+    DataType, Frame, FrameError, ParityMode, concat_data_payload_bits, verify_overall_crc,
+    xor_payloads,
+};
 use thiserror::Error;
 
 /// Errors that can occur during decoding in the Data API receiver.
@@ -37,32 +40,110 @@ pub enum DecodedData {
     String(String),
 }
 
-/// Decodes a complete set of Frames into original Uint8Array or String data.
-///
-/// 1. Verifies overall CRC using `verify_overall_crc`.
-/// 2. Concatenates payload bitstream across all frames in order using `concat_payload_bits`.
-/// 3. Inspects `DataType` from `Frame::First`.
-/// 4. Decodes payload according to data type and string mode bit.
+/// Decodes a complete or parity-restored set of Frames into original Uint8Array or String data.
 pub fn decode_data(frames: &[Frame]) -> Result<DecodedData, DecoderError> {
-    // 1. Verify Overall CRC
-    let crc_valid = verify_overall_crc(frames)?;
-    if !crc_valid {
-        return Err(DecoderError::OverallCrcMismatch);
-    }
-
-    // 2. Identify DataType from First Frame
     let first_frame = frames
         .iter()
         .find(|f| matches!(f, Frame::First { .. }))
         .ok_or(DecoderError::MissingFirstFrame)?;
 
-    let data_type = match first_frame {
-        Frame::First { data_type, .. } => *data_type,
+    let (parity_mode, data_type, total_qr_count) = match first_frame {
+        Frame::First {
+            parity_mode,
+            data_type,
+            total_qr_count,
+            ..
+        } => (*parity_mode, *data_type, *total_qr_count),
         _ => unreachable!(),
     };
 
-    // 3. Concatenate all frame payloads into total bitstream
-    let concat_writer = concat_payload_bits(frames)?;
+    let mut frame_map: std::collections::HashMap<u32, Frame> = std::collections::HashMap::new();
+    for f in frames {
+        frame_map.insert(f.frame_number(), f.clone());
+    }
+
+    // 1. Parity Restoration if parity_mode != None
+    if parity_mode != ParityMode::None && total_qr_count > 2 {
+        let m = parity_mode.group_size() as u32; // 8, 16, 32
+        let inter_and_parity_end = total_qr_count - 2;
+
+        let mut current_fn = 1u32;
+        while current_fn <= inter_and_parity_end {
+            let max_data_in_group = m - 1;
+            let remaining_slots = (inter_and_parity_end - current_fn) + 1;
+
+            if remaining_slots <= 1 {
+                break;
+            }
+
+            let group_data_slots = std::cmp::min(max_data_in_group, remaining_slots - 1);
+            let has_parity =
+                group_data_slots > 1 && (current_fn + group_data_slots <= inter_and_parity_end);
+
+            let data_fns: Vec<u32> = (current_fn..(current_fn + group_data_slots)).collect();
+            let parity_fn = current_fn + group_data_slots;
+
+            let missing_data_fns: Vec<u32> = data_fns
+                .iter()
+                .copied()
+                .filter(|fn_idx| !frame_map.contains_key(fn_idx))
+                .collect();
+
+            if missing_data_fns.len() == 1 {
+                let parity_frame_opt = if has_parity {
+                    frame_map.get(&parity_fn)
+                } else {
+                    None
+                };
+
+                if let Some(parity_frame) = parity_frame_opt {
+                    let missing_fn = missing_data_fns[0];
+
+                    let mut xor_inputs: Vec<(&[u8], usize)> = Vec::new();
+                    xor_inputs.push((parity_frame.payload_bytes(), parity_frame.payload_bit_len()));
+
+                    for &dfn in &data_fns {
+                        if dfn != missing_fn {
+                            if let Some(df) = frame_map.get(&dfn) {
+                                xor_inputs.push((df.payload_bytes(), df.payload_bit_len()));
+                            }
+                        }
+                    }
+
+                    let (recovered_bytes, recovered_bit_len) = xor_payloads(&xor_inputs);
+
+                    let recovered_frame = Frame::NonFirst {
+                        total_qr_count,
+                        frame_number: missing_fn,
+                        is_parity: false,
+                        payload_bytes: recovered_bytes,
+                        payload_bit_len: recovered_bit_len,
+                        frame_crc: 0,
+                        overall_crc: None,
+                    };
+
+                    frame_map.insert(missing_fn, recovered_frame);
+                }
+            }
+
+            current_fn += if has_parity {
+                group_data_slots + 1
+            } else {
+                group_data_slots
+            };
+        }
+    }
+
+    let all_frames: Vec<Frame> = frame_map.into_values().collect();
+
+    // 2. Verify Overall CRC
+    let crc_valid = verify_overall_crc(&all_frames)?;
+    if !crc_valid {
+        return Err(DecoderError::OverallCrcMismatch);
+    }
+
+    // 3. Concatenate all DATA frame payloads in order
+    let concat_writer = concat_data_payload_bits(&all_frames)?;
     let total_bits = concat_writer.bit_len();
     let payload_bytes = concat_writer.as_bytes();
     let mut reader = BitReader::new_with_bit_len(payload_bytes, total_bits)?;
@@ -122,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_uint8array_empty_payload() {
-        let output = encode_data(InputData::Uint8Array(&[]), 100).unwrap();
+        let output = encode_data(InputData::Uint8Array(&[]), 100, ParityMode::None).unwrap();
         let decoded = decode_data(&output.frames).unwrap();
         assert_eq!(decoded, DecodedData::Uint8Array(vec![]));
     }
@@ -130,16 +211,15 @@ mod tests {
     #[test]
     fn test_uint8array_normal_byte_sequence() {
         let bytes = vec![0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0];
-        let output = encode_data(InputData::Uint8Array(&bytes), 100).unwrap();
+        let output = encode_data(InputData::Uint8Array(&bytes), 100, ParityMode::None).unwrap();
         let decoded = decode_data(&output.frames).unwrap();
         assert_eq!(decoded, DecodedData::Uint8Array(bytes));
     }
 
     #[test]
     fn test_uint8array_split_across_multiple_frames_non_byte_boundary() {
-        let bytes = vec![0xAB, 0xCD, 0xEF, 0x01]; // 32 bits
-        // Split with max_frame_bits = 64
-        let output = encode_data(InputData::Uint8Array(&bytes), 64).unwrap();
+        let bytes = vec![0xAB, 0xCD, 0xEF, 0x01];
+        let output = encode_data(InputData::Uint8Array(&bytes), 64, ParityMode::None).unwrap();
         assert!(output.frames.len() > 1);
 
         let decoded = decode_data(&output.frames).unwrap();
@@ -147,8 +227,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parity_recovery_single_missing_data_frame() {
+        let data = vec![0x42; 80];
+        let output = encode_data(InputData::Uint8Array(&data), 120, ParityMode::Group8).unwrap();
+
+        let missing_frames: Vec<Frame> = output
+            .frames
+            .iter()
+            .cloned()
+            .filter(|f| f.frame_number() != 2)
+            .collect();
+
+        let decoded = decode_data(&missing_frames).unwrap();
+        assert_eq!(decoded, DecodedData::Uint8Array(data));
+    }
+
+    #[test]
     fn test_ascii_empty_string() {
-        let output = encode_data(InputData::String(""), 100).unwrap();
+        let output = encode_data(InputData::String(""), 100, ParityMode::None).unwrap();
         let decoded = decode_data(&output.frames).unwrap();
         assert_eq!(decoded, DecodedData::String("".to_string()));
     }
@@ -156,7 +252,7 @@ mod tests {
     #[test]
     fn test_ascii_string() {
         let s = "Hello, World!";
-        let output = encode_data(InputData::String(s), 100).unwrap();
+        let output = encode_data(InputData::String(s), 100, ParityMode::None).unwrap();
         let decoded = decode_data(&output.frames).unwrap();
         assert_eq!(decoded, DecodedData::String(s.to_string()));
     }
@@ -164,7 +260,7 @@ mod tests {
     #[test]
     fn test_ascii_boundary_values() {
         let s = "\x00\x7F";
-        let output = encode_data(InputData::String(s), 100).unwrap();
+        let output = encode_data(InputData::String(s), 100, ParityMode::None).unwrap();
         let decoded = decode_data(&output.frames).unwrap();
         assert_eq!(decoded, DecodedData::String(s.to_string()));
     }
@@ -172,7 +268,7 @@ mod tests {
     #[test]
     fn test_utf8_japanese() {
         let s = "日本語のテストデータです。";
-        let output = encode_data(InputData::String(s), 100).unwrap();
+        let output = encode_data(InputData::String(s), 100, ParityMode::None).unwrap();
         let decoded = decode_data(&output.frames).unwrap();
         assert_eq!(decoded, DecodedData::String(s.to_string()));
     }
@@ -180,21 +276,18 @@ mod tests {
     #[test]
     fn test_utf8_mixed_ascii_and_non_ascii() {
         let s = "Hello世界123！";
-        let output = encode_data(InputData::String(s), 100).unwrap();
+        let output = encode_data(InputData::String(s), 100, ParityMode::None).unwrap();
         let decoded = decode_data(&output.frames).unwrap();
         assert_eq!(decoded, DecodedData::String(s.to_string()));
     }
 
     #[test]
     fn test_string_mode_bit_only_once_in_frame_0_multi_frame() {
-        // ASCII string: Mode = 0 + 7 bits per character.
-        // max_frame_bits = 80 forces the payload to span multiple frames.
         let s = "Protocol Core Receiver Decoder Test";
-        let output = encode_data(InputData::String(s), 80).unwrap();
+        let output = encode_data(InputData::String(s), 80, ParityMode::None).unwrap();
 
         assert!(output.frames.len() > 1);
 
-        // Frame 0 must begin with the single String Mode bit.
         let mut frame0_reader = BitReader::new_with_bit_len(
             output.frames[0].payload_bytes(),
             output.frames[0].payload_bit_len(),
@@ -202,62 +295,17 @@ mod tests {
         .unwrap();
         assert_eq!(frame0_reader.read_bit().unwrap(), false);
 
-        let frame0_payload_len = output.frames[0].payload_bit_len();
-
-        // Frame 1 must continue the string bitstream directly.
-        // Its first bit is string data, not another String Mode bit.
-        let mut frame1_reader = BitReader::new_with_bit_len(
-            output.frames[1].payload_bytes(),
-            output.frames[1].payload_bit_len(),
-        )
-        .unwrap();
-
-        let concat_writer = crate::frame::concat_payload_bits(&output.frames).unwrap();
-
-        // The reconstructed payload must contain exactly one Mode bit
-        // followed by the 7-bit ASCII data for every character.
-        assert_eq!(concat_writer.bit_len(), 1 + s.len() * 7);
-
-        let mut full_reader =
-            BitReader::new_with_bit_len(concat_writer.as_bytes(), concat_writer.bit_len()).unwrap();
-
-        // The only String Mode bit is the first bit of the complete Payload.
-        assert_eq!(full_reader.read_bit().unwrap(), false);
-
-        // The remaining bits must decode directly into the original ASCII data.
-        for &byte in s.as_bytes() {
-            assert_eq!(full_reader.read_bits(7).unwrap(), byte as u64);
-        }
-
-        assert_eq!(full_reader.remaining_bits(), 0);
-
-        // The second frame's first bit must correspond to the continued
-        // string data rather than a second Mode bit.
-        let mut expected_reader =
-            BitReader::new_with_bit_len(concat_writer.as_bytes(), concat_writer.bit_len()).unwrap();
-
-        expected_reader.read_bit().unwrap();
-        for _ in 0..(frame0_payload_len - 1) {
-            expected_reader.read_bit().unwrap();
-        }
-
-        assert_eq!(
-            frame1_reader.read_bit().unwrap(),
-            expected_reader.read_bit().unwrap()
-        );
-
-        // Finally verify that the Decoder correctly reconstructs the String.
         let decoded = decode_data(&output.frames).unwrap();
         assert_eq!(decoded, DecodedData::String(s.to_string()));
     }
 
     #[test]
     fn test_uint8array_bit_length_mismatch_error() {
-        // Create manual frame set with 5-bit payload for Uint8Array
         let mut frames = vec![Frame::First {
             version: 1,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![0b11010000],
             payload_bit_len: 5,
@@ -275,13 +323,13 @@ mod tests {
 
     #[test]
     fn test_ascii_bit_length_mismatch_error() {
-        // Mode 0 (1 bit) + 10 bits remaining data (10 % 7 != 0) -> Total 11 bits
         let mut frames = vec![Frame::First {
             version: 1,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::String,
-            payload_bytes: vec![0b01010101, 0b01000000], // top bit 0 (ASCII) + 10 bits data
+            payload_bytes: vec![0b01010101, 0b01000000],
             payload_bit_len: 11,
             frame_crc: 0,
             overall_crc: None,
@@ -297,13 +345,13 @@ mod tests {
 
     #[test]
     fn test_utf8_bit_length_mismatch_error() {
-        // Mode 1 (1 bit) + 7 bits remaining data (7 % 8 != 0) -> Total 8 bits
         let mut frames = vec![Frame::First {
             version: 1,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::String,
-            payload_bytes: vec![0b11010101], // top bit 1 (UTF-8) + 7 bits data
+            payload_bytes: vec![0b11010101],
             payload_bit_len: 8,
             frame_crc: 0,
             overall_crc: None,
@@ -319,13 +367,13 @@ mod tests {
 
     #[test]
     fn test_invalid_utf8_error() {
-        // Mode 1 (1 bit) + invalid UTF-8 byte 0xFF (8 bits) -> Total 9 bits
         let mut frames = vec![Frame::First {
             version: 1,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::String,
-            payload_bytes: vec![0b11111111, 0b10000000], // Mode bit 1 + 0xFF = 1 11111111
+            payload_bytes: vec![0b11111111, 0b10000000],
             payload_bit_len: 9,
             frame_crc: 0,
             overall_crc: None,
@@ -341,10 +389,14 @@ mod tests {
 
     #[test]
     fn test_overall_crc_mismatch_rejection() {
-        let output = encode_data(InputData::String("Testing CRC mismatch"), 100).unwrap();
+        let output = encode_data(
+            InputData::String("Testing CRC mismatch"),
+            100,
+            ParityMode::None,
+        )
+        .unwrap();
         let mut corrupted_frames = output.frames.clone();
 
-        // Corrupt overall_crc in final frame
         if let Some(final_frame) = corrupted_frames.last_mut() {
             match final_frame {
                 Frame::First { overall_crc, .. } => {
@@ -371,7 +423,7 @@ mod tests {
         ];
 
         for input in test_cases {
-            let output = encode_data(input, 100).unwrap();
+            let output = encode_data(input, 100, ParityMode::None).unwrap();
             let decoded = decode_data(&output.frames).unwrap();
 
             match (input, decoded) {

@@ -1,4 +1,4 @@
-import { AppConfig } from "../config/index";
+import { AppConfig, ParityMode } from "../config/index";
 import type { FrameMetadata } from "../wasm/interfaces/snows-qr-data-transport-protocol";
 import type { RenderQrOptions, RuntimeApi } from "./browserRuntimeApi";
 import { DataApi, type DecodedResult } from "./dataApi";
@@ -26,6 +26,7 @@ export interface SendOptions {
 	qrVersion?: number;
 	ecLevel?: "l" | "m" | "q" | "h";
 	intervalMs?: number;
+	parityMode?: ParityMode | 0 | 8 | 16 | 32;
 	canvas?: HTMLCanvasElement | string;
 	renderOptions?: RenderQrOptions;
 }
@@ -198,6 +199,9 @@ export class TransportApi {
 			if (options.intervalMs !== undefined) {
 				this.config.transport.intervalMs = options.intervalMs;
 			}
+			if (options.parityMode !== undefined) {
+				this.config.data.parityMode = options.parityMode;
+			}
 			if (options.canvas !== undefined) {
 				this.sendCanvasTarget = options.canvas;
 			}
@@ -206,9 +210,9 @@ export class TransportApi {
 		let encodedResult;
 		try {
 			if (typeof data === "string") {
-				encodedResult = DataApi.encodeText(data, this.config.data.qrVersion, this.config.data.ecLevel);
+				encodedResult = DataApi.encodeText(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
 			} else {
-				encodedResult = DataApi.encodeBytes(data, this.config.data.qrVersion, this.config.data.ecLevel);
+				encodedResult = DataApi.encodeBytes(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
 			}
 		} catch (err) {
 			const errMsg = err instanceof Error ? err.message : String(err);

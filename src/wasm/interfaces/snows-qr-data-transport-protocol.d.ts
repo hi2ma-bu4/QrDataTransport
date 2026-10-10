@@ -1,7 +1,7 @@
 /** @module Interface snows:qr-data-transport/protocol **/
-export function encodeBytes(data: Uint8Array, maxFrameBits: number): EncodeResult;
-export function encodeText(text: string, maxFrameBits: number): EncodeResult;
-export function parseFrame(wireBytes: Uint8Array, knownTotalQrCount: number | undefined, knownFirstFrameCrc: number | undefined): FrameMetadata;
+export function encodeBytes(data: Uint8Array, maxFrameBits: number, parityMode: number): EncodeResult;
+export function encodeText(text: string, maxFrameBits: number, parityMode: number): EncodeResult;
+export function parseFrame(wireBytes: Uint8Array, knownTotalQrCount: number | undefined, knownFirstFrameCrc: number | undefined, knownParityMode: number | undefined): FrameMetadata;
 export function decodeFrames(wireFrames: Array<Uint8Array>): DecodedPayload;
 export function generateQrMatrix(wireBytes: Uint8Array, qrVersion: number, ecLevel: QrEcLevel): QrModuleMatrix;
 export function decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Uint8Array;
@@ -35,9 +35,11 @@ export type StringMode = 'ascii' | 'utf8';
 export type QrEcLevel = 'l' | 'm' | 'q' | 'h';
 export interface FrameMetadata {
   isFirst: boolean,
+  isParity: boolean,
   version: number,
   totalQrCount: number,
   frameNumber: number,
+  parityMode?: number,
   dataType?: DataType,
   payloadBitLen: number,
   frameCrc: number,

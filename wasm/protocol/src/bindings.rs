@@ -120,9 +120,11 @@ pub mod exports {
                 #[derive(Clone, Copy)]
                 pub struct FrameMetadata {
                     pub is_first: bool,
+                    pub is_parity: bool,
                     pub version: u8,
                     pub total_qr_count: u32,
                     pub frame_number: u32,
+                    pub parity_mode: Option<u8>,
                     pub data_type: Option<DataType>,
                     pub payload_bit_len: u32,
                     pub frame_crc: u16,
@@ -136,9 +138,11 @@ pub mod exports {
                     ) -> ::core::fmt::Result {
                         f.debug_struct("FrameMetadata")
                             .field("is-first", &self.is_first)
+                            .field("is-parity", &self.is_parity)
                             .field("version", &self.version)
                             .field("total-qr-count", &self.total_qr_count)
                             .field("frame-number", &self.frame_number)
+                            .field("parity-mode", &self.parity_mode)
                             .field("data-type", &self.data_type)
                             .field("payload-bit-len", &self.payload_bit_len)
                             .field("frame-crc", &self.frame_crc)
@@ -224,12 +228,14 @@ pub mod exports {
                     arg0: *mut u8,
                     arg1: usize,
                     arg2: i32,
+                    arg3: i32,
                 ) -> *mut u8 {
                     #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
                     let len0 = arg1;
                     let result1 = T::encode_bytes(
                         _rt::Vec::from_raw_parts(arg0.cast(), len0, len0),
                         arg2 as u32,
+                        arg3 as u8,
                     );
                     let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
                     match result1 {
@@ -349,11 +355,16 @@ pub mod exports {
                     arg0: *mut u8,
                     arg1: usize,
                     arg2: i32,
+                    arg3: i32,
                 ) -> *mut u8 {
                     #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
                     let len0 = arg1;
                     let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
-                    let result1 = T::encode_text(_rt::string_lift(bytes0), arg2 as u32);
+                    let result1 = T::encode_text(
+                        _rt::string_lift(bytes0),
+                        arg2 as u32,
+                        arg3 as u8,
+                    );
                     let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
                     match result1 {
                         Ok(e) => {
@@ -475,6 +486,8 @@ pub mod exports {
                     arg3: i32,
                     arg4: i32,
                     arg5: i32,
+                    arg6: i32,
+                    arg7: i32,
                 ) -> *mut u8 {
                     #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
                     let len0 = arg1;
@@ -496,6 +509,14 @@ pub mod exports {
                             }
                             _ => _rt::invalid_enum_discriminant(),
                         },
+                        match arg6 {
+                            0 => None,
+                            1 => {
+                                let e = arg7 as u8;
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
                     );
                     let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
                     match result1 {
@@ -503,9 +524,11 @@ pub mod exports {
                             *ptr2.add(0).cast::<u8>() = (0i32) as u8;
                             let FrameMetadata {
                                 is_first: is_first3,
+                                is_parity: is_parity3,
                                 version: version3,
                                 total_qr_count: total_qr_count3,
                                 frame_number: frame_number3,
+                                parity_mode: parity_mode3,
                                 data_type: data_type3,
                                 payload_bit_len: payload_bit_len3,
                                 frame_crc: frame_crc3,
@@ -520,6 +543,12 @@ pub mod exports {
                             }) as u8;
                             *ptr2
                                 .add(1 + 1 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (match is_parity3 {
+                                true => 1,
+                                false => 0,
+                            }) as u8;
+                            *ptr2
+                                .add(2 + 1 * ::core::mem::size_of::<*const u8>())
                                 .cast::<u8>() = (_rt::as_i32(version3)) as u8;
                             *ptr2
                                 .add(4 + 1 * ::core::mem::size_of::<*const u8>())
@@ -527,18 +556,33 @@ pub mod exports {
                             *ptr2
                                 .add(8 + 1 * ::core::mem::size_of::<*const u8>())
                                 .cast::<i32>() = _rt::as_i32(frame_number3);
-                            match data_type3 {
+                            match parity_mode3 {
                                 Some(e) => {
                                     *ptr2
                                         .add(12 + 1 * ::core::mem::size_of::<*const u8>())
                                         .cast::<u8>() = (1i32) as u8;
                                     *ptr2
                                         .add(13 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (e.clone() as i32) as u8;
+                                        .cast::<u8>() = (_rt::as_i32(e)) as u8;
                                 }
                                 None => {
                                     *ptr2
                                         .add(12 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (0i32) as u8;
+                                }
+                            };
+                            match data_type3 {
+                                Some(e) => {
+                                    *ptr2
+                                        .add(14 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (1i32) as u8;
+                                    *ptr2
+                                        .add(15 + 1 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<u8>() = (e.clone() as i32) as u8;
+                                }
+                                None => {
+                                    *ptr2
+                                        .add(14 + 1 * ::core::mem::size_of::<*const u8>())
                                         .cast::<u8>() = (0i32) as u8;
                                 }
                             };
@@ -886,20 +930,23 @@ pub mod exports {
                     }
                 }
                 pub trait Guest {
-                    /// 入力された生のバイトまたは文字列を、max-frame-bits に基づいてスプリット ワイヤー フレームにエンコードします。
+                    /// 入力された生のバイトまたは文字列を、max-frame-bits および parity-mode に基づいてスプリット ワイヤー フレームにエンコードします。
                     fn encode_bytes(
                         data: _rt::Vec<u8>,
                         max_frame_bits: u32,
+                        parity_mode: u8,
                     ) -> Result<EncodeResult, _rt::String>;
                     fn encode_text(
                         text: _rt::String,
                         max_frame_bits: u32,
+                        parity_mode: u8,
                     ) -> Result<EncodeResult, _rt::String>;
                     /// 単一のワイヤー フレームのメタデータを解析し、その CRC を検証します。
                     fn parse_frame(
                         wire_bytes: _rt::Vec<u8>,
                         known_total_qr_count: Option<u32>,
                         known_first_frame_crc: Option<u16>,
+                        known_parity_mode: Option<u8>,
                     ) -> Result<FrameMetadata, _rt::String>;
                     /// ワイヤー フレームの完全なリストを復元されたデータ (Uint8Array または String) にデコードします。
                     fn decode_frames(
@@ -923,27 +970,28 @@ pub mod exports {
                         const _ : () = { #[unsafe (export_name =
                         "snows:qr-data-transport/protocol#encode-bytes")] unsafe extern
                         "C" fn export_encode_bytes(arg0 : * mut u8, arg1 : usize, arg2 :
-                        i32,) -> * mut u8 { unsafe { $($path_to_types)*::
-                        _export_encode_bytes_cabi::<$ty > (arg0, arg1, arg2) } } #[unsafe
-                        (export_name =
+                        i32, arg3 : i32,) -> * mut u8 { unsafe { $($path_to_types)*::
+                        _export_encode_bytes_cabi::<$ty > (arg0, arg1, arg2, arg3) } }
+                        #[unsafe (export_name =
                         "cabi_post_snows:qr-data-transport/protocol#encode-bytes")]
                         unsafe extern "C" fn _post_return_encode_bytes(arg0 : * mut u8,)
                         { unsafe { $($path_to_types)*:: __post_return_encode_bytes::<$ty
                         > (arg0) } } #[unsafe (export_name =
                         "snows:qr-data-transport/protocol#encode-text")] unsafe extern
                         "C" fn export_encode_text(arg0 : * mut u8, arg1 : usize, arg2 :
-                        i32,) -> * mut u8 { unsafe { $($path_to_types)*::
-                        _export_encode_text_cabi::<$ty > (arg0, arg1, arg2) } } #[unsafe
-                        (export_name =
+                        i32, arg3 : i32,) -> * mut u8 { unsafe { $($path_to_types)*::
+                        _export_encode_text_cabi::<$ty > (arg0, arg1, arg2, arg3) } }
+                        #[unsafe (export_name =
                         "cabi_post_snows:qr-data-transport/protocol#encode-text")] unsafe
                         extern "C" fn _post_return_encode_text(arg0 : * mut u8,) { unsafe
                         { $($path_to_types)*:: __post_return_encode_text::<$ty > (arg0) }
                         } #[unsafe (export_name =
                         "snows:qr-data-transport/protocol#parse-frame")] unsafe extern
                         "C" fn export_parse_frame(arg0 : * mut u8, arg1 : usize, arg2 :
-                        i32, arg3 : i32, arg4 : i32, arg5 : i32,) -> * mut u8 { unsafe {
-                        $($path_to_types)*:: _export_parse_frame_cabi::<$ty > (arg0,
-                        arg1, arg2, arg3, arg4, arg5) } } #[unsafe (export_name =
+                        i32, arg3 : i32, arg4 : i32, arg5 : i32, arg6 : i32, arg7 : i32,)
+                        -> * mut u8 { unsafe { $($path_to_types)*::
+                        _export_parse_frame_cabi::<$ty > (arg0, arg1, arg2, arg3, arg4,
+                        arg5, arg6, arg7) } } #[unsafe (export_name =
                         "cabi_post_snows:qr-data-transport/protocol#parse-frame")] unsafe
                         extern "C" fn _post_return_parse_frame(arg0 : * mut u8,) { unsafe
                         { $($path_to_types)*:: __post_return_parse_frame::<$ty > (arg0) }
@@ -1124,28 +1172,30 @@ pub(crate) use __export_qr_data_transport_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1019] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf3\x06\x01A\x02\x01\
-A\x02\x01B'\x01m\x02\x0auint8array\x0cbytes-string\x04\0\x09data-type\x03\0\0\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1091] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xbb\x07\x01A\x02\x01\
+A\x02\x01B(\x01m\x02\x0auint8array\x0cbytes-string\x04\0\x09data-type\x03\0\0\x01\
 m\x02\x05ascii\x04utf8\x04\0\x0bstring-mode\x03\0\x02\x01m\x04\x01l\x01m\x01q\x01\
-h\x04\0\x0bqr-ec-level\x03\0\x04\x01k\x01\x01ky\x01r\x09\x08is-first\x7f\x07vers\
-ion}\x0etotal-qr-county\x0cframe-numbery\x09data-type\x06\x0fpayload-bit-leny\x09\
-frame-crc{\x0boverall-crc\x07\x09crc-valid\x7f\x04\0\x0eframe-metadata\x03\0\x08\
-\x01p}\x01q\x02\x05bytes\x01\x0a\0\x04text\x01s\0\x04\0\x0fdecoded-payload\x03\0\
-\x0b\x01r\x03\x0awire-bytes\x0a\x0cframe-numbery\x0etotal-qr-county\x04\0\x14enc\
-oded-frame-output\x03\0\x0d\x01p\x0e\x01r\x01\x06frames\x0f\x04\0\x0dencode-resu\
-lt\x03\0\x10\x01r\x03\x05widthy\x06heighty\x07modules\x0a\x04\0\x10qr-module-mat\
-rix\x03\0\x12\x01j\x01\x11\x01s\x01@\x02\x04data\x0a\x0emax-frame-bitsy\0\x14\x04\
-\0\x0cencode-bytes\x01\x15\x01@\x02\x04texts\x0emax-frame-bitsy\0\x14\x04\0\x0be\
-ncode-text\x01\x16\x01k{\x01j\x01\x09\x01s\x01@\x03\x0awire-bytes\x0a\x14known-t\
-otal-qr-count\x07\x15known-first-frame-crc\x17\0\x18\x04\0\x0bparse-frame\x01\x19\
-\x01p\x0a\x01j\x01\x0c\x01s\x01@\x01\x0bwire-frames\x1a\0\x1b\x04\0\x0ddecode-fr\
-ames\x01\x1c\x01j\x01\x13\x01s\x01@\x03\x0awire-bytes\x0a\x0aqr-version}\x08ec-l\
-evel\x05\0\x1d\x04\0\x12generate-qr-matrix\x01\x1e\x01j\x01\x0a\x01s\x01@\x03\x0b\
-rgba-pixels\x0a\x05widthy\x06heighty\0\x1f\x04\0\x0fdecode-qr-image\x01\x20\x04\0\
-\x20snows:qr-data-transport/protocol\x05\0\x04\0)snows:qr-data-transport/qr-data\
--transport\x04\0\x0b\x17\x01\0\x11qr-data-transport\x03\0\0\0G\x09producers\x01\x0c\
-processed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+h\x04\0\x0bqr-ec-level\x03\0\x04\x01k}\x01k\x01\x01ky\x01r\x0b\x08is-first\x7f\x09\
+is-parity\x7f\x07version}\x0etotal-qr-county\x0cframe-numbery\x0bparity-mode\x06\
+\x09data-type\x07\x0fpayload-bit-leny\x09frame-crc{\x0boverall-crc\x08\x09crc-va\
+lid\x7f\x04\0\x0eframe-metadata\x03\0\x09\x01p}\x01q\x02\x05bytes\x01\x0b\0\x04t\
+ext\x01s\0\x04\0\x0fdecoded-payload\x03\0\x0c\x01r\x03\x0awire-bytes\x0b\x0cfram\
+e-numbery\x0etotal-qr-county\x04\0\x14encoded-frame-output\x03\0\x0e\x01p\x0f\x01\
+r\x01\x06frames\x10\x04\0\x0dencode-result\x03\0\x11\x01r\x03\x05widthy\x06heigh\
+ty\x07modules\x0b\x04\0\x10qr-module-matrix\x03\0\x13\x01j\x01\x12\x01s\x01@\x03\
+\x04data\x0b\x0emax-frame-bitsy\x0bparity-mode}\0\x15\x04\0\x0cencode-bytes\x01\x16\
+\x01@\x03\x04texts\x0emax-frame-bitsy\x0bparity-mode}\0\x15\x04\0\x0bencode-text\
+\x01\x17\x01k{\x01j\x01\x0a\x01s\x01@\x04\x0awire-bytes\x0b\x14known-total-qr-co\
+unt\x08\x15known-first-frame-crc\x18\x11known-parity-mode\x06\0\x19\x04\0\x0bpar\
+se-frame\x01\x1a\x01p\x0b\x01j\x01\x0d\x01s\x01@\x01\x0bwire-frames\x1b\0\x1c\x04\
+\0\x0ddecode-frames\x01\x1d\x01j\x01\x14\x01s\x01@\x03\x0awire-bytes\x0b\x0aqr-v\
+ersion}\x08ec-level\x05\0\x1e\x04\0\x12generate-qr-matrix\x01\x1f\x01j\x01\x0b\x01\
+s\x01@\x03\x0brgba-pixels\x0b\x05widthy\x06heighty\0\x20\x04\0\x0fdecode-qr-imag\
+e\x01!\x04\0\x20snows:qr-data-transport/protocol\x05\0\x04\0)snows:qr-data-trans\
+port/qr-data-transport\x04\0\x0b\x17\x01\0\x11qr-data-transport\x03\0\0\0G\x09pr\
+oducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x06\
+0.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

@@ -3,6 +3,46 @@ use crate::crc::crc16;
 use crate::varint::{VarintError, read_varint, write_varint};
 use thiserror::Error;
 
+/// Parity Mode (3 bits) as specified in modified First QR format
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ParityMode {
+    None = 0,
+    Group8 = 8,
+    Group16 = 16,
+    Group32 = 32,
+}
+
+impl ParityMode {
+    pub fn from_u8(value: u8) -> Result<Self, FrameError> {
+        match value {
+            0 => Ok(ParityMode::None),
+            1 | 8 => Ok(ParityMode::Group8),
+            2 | 16 => Ok(ParityMode::Group16),
+            3 | 32 => Ok(ParityMode::Group32),
+            other => Err(FrameError::InvalidParityMode(other)),
+        }
+    }
+
+    pub fn to_wire_bits(self) -> u8 {
+        match self {
+            ParityMode::None => 0b000,
+            ParityMode::Group8 => 0b001,
+            ParityMode::Group16 => 0b010,
+            ParityMode::Group32 => 0b011,
+        }
+    }
+
+    pub fn group_size(self) -> usize {
+        match self {
+            ParityMode::None => 0,
+            ParityMode::Group8 => 8,
+            ParityMode::Group16 => 16,
+            ParityMode::Group32 => 32,
+        }
+    }
+}
+
 /// Data Type (2 bits) as specified in Spec Section 15
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -32,6 +72,9 @@ pub enum FrameError {
 
     #[error("Invalid Library Format Version: {0}")]
     InvalidVersion(u8),
+
+    #[error("Invalid Parity Mode: {0:#05b}")]
+    InvalidParityMode(u8),
 
     #[error("Invalid Data Type: {0}")]
     InvalidDataType(u8),
@@ -88,6 +131,7 @@ pub enum FrameError {
 pub struct DecodeContext {
     pub total_qr_count: Option<u32>,
     pub first_frame_crc: Option<u16>,
+    pub parity_mode: Option<ParityMode>,
 }
 
 /// Lightweight metadata extracted from a Frame header without full body or CRC validation.
@@ -95,9 +139,11 @@ pub struct DecodeContext {
 pub struct FrameMetadata {
     pub start_bit: bool,
     pub is_first: bool,
+    pub is_parity: bool,
     pub version: Option<u8>,
     pub total_qr_count: Option<u32>,
     pub frame_number: u32,
+    pub parity_mode: Option<ParityMode>,
     pub data_type: Option<DataType>,
     pub payload_bit_len: usize,
     pub header_bit_len: usize,
@@ -113,14 +159,41 @@ impl FrameMetadata {
     }
 }
 
+/// Determines whether a frame number corresponds to a Parity Frame given total_qr_count and parity_mode.
+pub fn is_parity_frame_number(
+    frame_number: u32,
+    total_qr_count: u32,
+    parity_mode: ParityMode,
+) -> bool {
+    if parity_mode == ParityMode::None || frame_number == 0 || frame_number >= total_qr_count - 1 {
+        return false;
+    }
+
+    let m = parity_mode.group_size() as u32; // 8, 16, 32
+    let g = (frame_number - 1) / m + 1;
+    let s_g = (g - 1) * m + 1;
+
+    let total_inter_and_parity = total_qr_count.saturating_sub(2);
+    let end_index = total_inter_and_parity;
+
+    if s_g + m - 1 <= end_index {
+        let p_g = g * m;
+        frame_number == p_g
+    } else {
+        let k = (total_qr_count - 1) - s_g;
+        if k > 1 {
+            frame_number == end_index
+        } else {
+            false
+        }
+    }
+}
+
 /// Parses the header metadata from a raw byte slice bitstream.
-///
-/// Does not perform CRC verification, padding validation, or payload extraction.
-/// For Non-First frames (start_bit = false), `known_total_qr_count` MUST be provided
-/// to determine the bit length of `frame_number`.
 pub fn parse_frame_metadata(
     data: &[u8],
     known_total_qr_count: Option<u32>,
+    known_parity_mode: Option<ParityMode>,
 ) -> Result<FrameMetadata, FrameError> {
     let mut reader = BitReader::new(data);
 
@@ -143,6 +216,10 @@ pub fn parse_frame_metadata(
         let frame_bits = calculate_frame_bits(total_qr_count);
         let frame_number = reader.read_bits(frame_bits)? as u32;
 
+        // Parity Mode (3 bits)
+        let parity_mode_raw = reader.read_bits(3)? as u8;
+        let parity_mode = ParityMode::from_u8(parity_mode_raw)?;
+
         // 15. Data Type (2 bits)
         let data_type_raw = reader.read_bits(2)? as u8;
         let data_type = DataType::from_u8(data_type_raw)?;
@@ -156,9 +233,11 @@ pub fn parse_frame_metadata(
         Ok(FrameMetadata {
             start_bit: true,
             is_first,
+            is_parity: false,
             version: Some(version),
             total_qr_count: Some(total_qr_count),
             frame_number,
+            parity_mode: Some(parity_mode),
             data_type: Some(data_type),
             payload_bit_len,
             header_bit_len,
@@ -175,6 +254,9 @@ pub fn parse_frame_metadata(
         let frame_bits = calculate_frame_bits(total_qr_count);
         let frame_number = reader.read_bits(frame_bits)? as u32;
 
+        let mode = known_parity_mode.unwrap_or(ParityMode::None);
+        let is_parity = is_parity_frame_number(frame_number, total_qr_count, mode);
+
         // 16. Payload Length (Varint)
         let payload_bit_len = read_varint(&mut reader)? as usize;
         let header_bit_len = reader.bit_pos();
@@ -182,9 +264,11 @@ pub fn parse_frame_metadata(
         Ok(FrameMetadata {
             start_bit: false,
             is_first: false,
+            is_parity,
             version: None,
             total_qr_count: Some(total_qr_count),
             frame_number,
+            parity_mode: known_parity_mode,
             data_type: None,
             payload_bit_len,
             header_bit_len,
@@ -199,6 +283,7 @@ pub enum Frame {
         version: u8,
         total_qr_count: u32,
         frame_number: u32,
+        parity_mode: ParityMode,
         data_type: DataType,
         payload_bytes: Vec<u8>,
         payload_bit_len: usize,
@@ -208,6 +293,7 @@ pub enum Frame {
     NonFirst {
         total_qr_count: u32,
         frame_number: u32,
+        is_parity: bool,
         payload_bytes: Vec<u8>,
         payload_bit_len: usize,
         frame_crc: u16,
@@ -241,6 +327,20 @@ impl Frame {
         match self {
             Frame::First { overall_crc, .. } => *overall_crc,
             Frame::NonFirst { overall_crc, .. } => *overall_crc,
+        }
+    }
+
+    pub fn parity_mode(&self) -> Option<ParityMode> {
+        match self {
+            Frame::First { parity_mode, .. } => Some(*parity_mode),
+            Frame::NonFirst { .. } => None,
+        }
+    }
+
+    pub fn is_parity(&self) -> bool {
+        match self {
+            Frame::First { .. } => false,
+            Frame::NonFirst { is_parity, .. } => *is_parity,
         }
     }
 
@@ -278,8 +378,6 @@ pub fn calculate_frame_bits(total_qr_count: u32) -> usize {
 }
 
 /// Encodes a Frame into a bitstream byte vector.
-///
-/// For Non-First frames, `first_frame_crc` MUST be provided in `first_frame_crc_opt`.
 pub fn encode_frame(
     frame: &Frame,
     first_frame_crc_opt: Option<u16>,
@@ -313,6 +411,7 @@ pub fn encode_frame(
     match frame {
         Frame::First {
             version,
+            parity_mode,
             data_type,
             overall_crc,
             ..
@@ -339,6 +438,9 @@ pub fn encode_frame(
 
             // 14. Frame Number (FrameBits bits)
             writer.write_bits(frame_number as u64, frame_bits)?;
+
+            // Parity Mode (3 bits)
+            writer.write_bits(parity_mode.to_wire_bits() as u64, 3)?;
 
             // 15. Data Type (2 bits)
             writer.write_bits(*data_type as u64, 2)?;
@@ -418,11 +520,10 @@ pub fn encode_frame(
 }
 
 /// Decodes a Frame from a raw byte slice bitstream.
-///
-/// For Non-First frames (Start Bit = 0), `context` MUST provide `total_qr_count` and `first_frame_crc`.
 pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Frame, FrameError> {
     let known_total = context.and_then(|c| c.total_qr_count);
-    let meta = parse_frame_metadata(data, known_total)?;
+    let known_mode = context.and_then(|c| c.parity_mode);
+    let meta = parse_frame_metadata(data, known_total, known_mode)?;
 
     let mut reader = BitReader::new(data);
     for _ in 0..meta.header_bit_len {
@@ -433,6 +534,7 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
         let version = meta.version.unwrap();
         let total_qr_count = meta.total_qr_count.unwrap();
         let frame_number = meta.frame_number;
+        let parity_mode = meta.parity_mode.unwrap();
         let data_type = meta.data_type.unwrap();
         let payload_bit_len = meta.payload_bit_len;
 
@@ -502,6 +604,7 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
             version,
             total_qr_count,
             frame_number,
+            parity_mode,
             data_type,
             payload_bytes,
             payload_bit_len,
@@ -584,6 +687,7 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
         Ok(Frame::NonFirst {
             total_qr_count,
             frame_number,
+            is_parity: meta.is_parity,
             payload_bytes,
             payload_bit_len,
             frame_crc: wire_crc,
@@ -592,54 +696,80 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
     }
 }
 
-/// Concatenates the payloads of a complete set of Frames in frame_number order (0..N-1).
-///
-/// Validates that all frames from 0 to Total QR Count - 1 are present with no duplicates or missing frames,
-/// and that total_qr_count matches across all frames.
-pub fn concat_payload_bits(frames: &[Frame]) -> Result<BitWriter, FrameError> {
+/// Helper function to perform XOR across multiple payload slices.
+/// Zero-pads shorter payloads to match the max bit length.
+pub fn xor_payloads(payloads: &[(&[u8], usize)]) -> (Vec<u8>, usize) {
+    if payloads.is_empty() {
+        return (vec![], 0);
+    }
+    let max_bit_len = payloads.iter().map(|(_, len)| *len).max().unwrap_or(0);
+    let max_byte_len = (max_bit_len + 7) / 8;
+    let mut result = vec![0u8; max_byte_len];
+
+    for (bytes, bit_len) in payloads {
+        let effective_bytes = std::cmp::min(bytes.len(), (bit_len + 7) / 8);
+        for i in 0..max_byte_len {
+            let b = if i < effective_bytes { bytes[i] } else { 0 };
+            result[i] ^= b;
+        }
+    }
+
+    let rem = max_bit_len % 8;
+    if rem > 0 && !result.is_empty() {
+        let mask = (0xFF00 >> rem) as u8;
+        let last_idx = result.len() - 1;
+        result[last_idx] &= mask;
+    }
+
+    (result, max_bit_len)
+}
+
+/// Concatenates the payloads of a complete set of Data Frames in frame_number order (excluding Parity frames).
+pub fn concat_data_payload_bits(frames: &[Frame]) -> Result<BitWriter, FrameError> {
     if frames.is_empty() {
         return Err(FrameError::EmptyFrames);
     }
 
-    let expected_total = frames[0].total_qr_count();
-    if expected_total < 1 || expected_total > 65536 {
-        return Err(FrameError::InvalidTotalQrCount(expected_total));
-    }
+    let first_frame = frames
+        .iter()
+        .find(|f| matches!(f, Frame::First { .. }))
+        .ok_or(FrameError::MissingFrameNumber(0))?;
 
-    if frames.len() != expected_total as usize {
-        return Err(FrameError::IncompleteFrameSet {
-            expected: expected_total,
-            actual: frames.len(),
-        });
-    }
+    let expected_total = first_frame.total_qr_count();
+    let parity_mode = first_frame.parity_mode().unwrap_or(ParityMode::None);
 
-    for frame in frames {
-        if frame.total_qr_count() != expected_total {
+    for f in frames {
+        if f.total_qr_count() != expected_total {
             return Err(FrameError::MismatchedTotalQrCount {
                 expected: expected_total,
-                actual: frame.total_qr_count(),
-            });
-        }
-        if frame.frame_number() >= expected_total {
-            return Err(FrameError::InvalidFrameNumber {
-                frame_number: frame.frame_number(),
-                total_qr_count: expected_total,
+                actual: f.total_qr_count(),
             });
         }
     }
 
-    let mut sorted_frames: Vec<&Frame> = frames.iter().collect();
-    sorted_frames.sort_by_key(|f| f.frame_number());
+    let data_frames: Vec<&Frame> = frames.iter().filter(|f| !f.is_parity()).collect();
+    if data_frames.is_empty() {
+        return Err(FrameError::EmptyFrames);
+    }
 
-    for (i, frame) in sorted_frames.iter().enumerate() {
-        let expected_fn = i as u32;
-        let actual_fn = frame.frame_number();
-        if actual_fn != expected_fn {
-            if actual_fn < expected_fn {
-                return Err(FrameError::DuplicateFrameNumber(actual_fn));
-            } else {
-                return Err(FrameError::MissingFrameNumber(expected_fn));
-            }
+    let mut seen = std::collections::HashSet::new();
+    for f in &data_frames {
+        if !seen.insert(f.frame_number()) {
+            return Err(FrameError::DuplicateFrameNumber(f.frame_number()));
+        }
+    }
+
+    let frame_map: std::collections::HashMap<u32, &Frame> =
+        data_frames.iter().map(|f| (f.frame_number(), *f)).collect();
+
+    let mut sorted_frames = Vec::new();
+
+    for fn_idx in 0..expected_total {
+        if !is_parity_frame_number(fn_idx, expected_total, parity_mode) {
+            let df = frame_map
+                .get(&fn_idx)
+                .ok_or(FrameError::MissingFrameNumber(fn_idx))?;
+            sorted_frames.push(*df);
         }
     }
 
@@ -661,15 +791,13 @@ pub fn concat_payload_bits(frames: &[Frame]) -> Result<BitWriter, FrameError> {
     Ok(writer)
 }
 
-/// Calculates the Overall CRC (CRC-32/ISO-HDLC) across all payloads in a complete Frame set.
+/// Calculates the Overall CRC (CRC-32/ISO-HDLC) across all data payloads in a Frame set.
 pub fn calculate_overall_crc(frames: &[Frame]) -> Result<u32, FrameError> {
-    let writer = concat_payload_bits(frames)?;
+    let writer = concat_data_payload_bits(frames)?;
     Ok(crate::crc::crc32_bits(writer.as_bytes(), writer.bit_len()))
 }
 
 /// Verifies that the calculated Overall CRC matches the Overall CRC stored in the Final QR.
-///
-/// Returns Ok(true) if CRC matches, Ok(false) if mismatch.
 pub fn verify_overall_crc(frames: &[Frame]) -> Result<bool, FrameError> {
     let calculated = calculate_overall_crc(frames)?;
 
@@ -694,11 +822,11 @@ mod tests {
 
     #[test]
     fn test_parse_frame_metadata_first_and_non_first() {
-        // First Frame (N=3, FN=0, Uint8Array, PayloadLen=16)
         let frame0 = Frame::First {
             version: 1,
             total_qr_count: 3,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![0x12, 0x34],
             payload_bit_len: 16,
@@ -707,7 +835,7 @@ mod tests {
         };
         let encoded0 = encode_frame(&frame0, None).unwrap();
 
-        let meta0 = parse_frame_metadata(&encoded0, None).unwrap();
+        let meta0 = parse_frame_metadata(&encoded0, None, None).unwrap();
         assert_eq!(meta0.start_bit, true);
         assert_eq!(meta0.is_first, true);
         assert_eq!(meta0.version, Some(1));
@@ -720,10 +848,10 @@ mod tests {
         let decoded0 = decode_frame(&encoded0, None).unwrap();
         let first_crc = decoded0.frame_crc();
 
-        // Non-First Frame (N=3, FN=2 - Final, PayloadLen=8)
         let frame2 = Frame::NonFirst {
             total_qr_count: 3,
             frame_number: 2,
+            is_parity: false,
             payload_bytes: vec![0xAB],
             payload_bit_len: 8,
             frame_crc: 0,
@@ -731,7 +859,7 @@ mod tests {
         };
         let encoded2 = encode_frame(&frame2, Some(first_crc)).unwrap();
 
-        let meta2 = parse_frame_metadata(&encoded2, Some(3)).unwrap();
+        let meta2 = parse_frame_metadata(&encoded2, Some(3), None).unwrap();
         assert_eq!(meta2.start_bit, false);
         assert_eq!(meta2.is_first, false);
         assert_eq!(meta2.version, None);
@@ -744,10 +872,10 @@ mod tests {
 
     #[test]
     fn test_parse_frame_metadata_missing_known_total_count() {
-        // Non-First frame without providing known_total_qr_count should fail
         let frame1 = Frame::NonFirst {
             total_qr_count: 2,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: vec![0x00],
             payload_bit_len: 8,
             frame_crc: 0,
@@ -755,7 +883,7 @@ mod tests {
         };
         let encoded1 = encode_frame(&frame1, Some(0x1234)).unwrap();
 
-        let err = parse_frame_metadata(&encoded1, None).unwrap_err();
+        let err = parse_frame_metadata(&encoded1, None, None).unwrap_err();
         assert_eq!(err, FrameError::MissingContext);
     }
 
@@ -779,12 +907,12 @@ mod tests {
             let expected_frame_bits = calculate_frame_bits(total_qr_count);
             let expected_stored = (total_qr_count - 1) as u16;
 
-            // Test First frame (frame 0)
             let is_final_0 = total_qr_count == 1;
             let frame0 = Frame::First {
                 version: 1,
                 total_qr_count,
                 frame_number: 0,
+                parity_mode: ParityMode::None,
                 data_type: DataType::Uint8Array,
                 payload_bytes: vec![0x12],
                 payload_bit_len: 8,
@@ -794,24 +922,23 @@ mod tests {
 
             let encoded0 = encode_frame(&frame0, None).unwrap();
 
-            // Verify StoredTotalQRCount in wire stream
             let mut reader = BitReader::new(&encoded0);
-            assert_eq!(reader.read_bit().unwrap(), true); // Start bit
-            assert_eq!(reader.read_bits(4).unwrap(), 1); // Version
-            assert_eq!(reader.read_bits(16).unwrap(), expected_stored as u64); // StoredTotalQRCount
-            assert_eq!(reader.read_bits(expected_frame_bits).unwrap(), 0); // Frame Number 0
+            assert_eq!(reader.read_bit().unwrap(), true);
+            assert_eq!(reader.read_bits(4).unwrap(), 1);
+            assert_eq!(reader.read_bits(16).unwrap(), expected_stored as u64);
+            assert_eq!(reader.read_bits(expected_frame_bits).unwrap(), 0);
 
             let decoded0 = decode_frame(&encoded0, None).unwrap();
             assert_eq!(decoded0.total_qr_count(), total_qr_count);
             assert_eq!(decoded0.frame_number(), 0);
             let first_crc = decoded0.frame_crc();
 
-            // Test Last frame (frame_number = total_qr_count - 1)
             let last_frame_num = total_qr_count - 1;
             if last_frame_num > 0 {
                 let frame_last = Frame::NonFirst {
                     total_qr_count,
                     frame_number: last_frame_num,
+                    is_parity: false,
                     payload_bytes: vec![0x34],
                     payload_bit_len: 8,
                     frame_crc: 0,
@@ -821,9 +948,8 @@ mod tests {
 
                 let encoded_last = encode_frame(&frame_last, Some(first_crc)).unwrap();
 
-                // Inspect Non-First wire format
                 let mut reader_last = BitReader::new(&encoded_last);
-                assert_eq!(reader_last.read_bit().unwrap(), false); // Start bit 0
+                assert_eq!(reader_last.read_bit().unwrap(), false);
                 assert_eq!(
                     reader_last.read_bits(expected_frame_bits).unwrap(),
                     last_frame_num as u64
@@ -832,6 +958,7 @@ mod tests {
                 let ctx = DecodeContext {
                     total_qr_count: Some(total_qr_count),
                     first_frame_crc: Some(first_crc),
+                    parity_mode: Some(ParityMode::None),
                 };
                 let decoded_last = decode_frame(&encoded_last, Some(&ctx)).unwrap();
                 assert_eq!(decoded_last.frame_number(), last_frame_num);
@@ -846,11 +973,12 @@ mod tests {
             version: 1,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![],
             payload_bit_len: 0,
             frame_crc: 0,
-            overall_crc: None, // Missing overall CRC for final frame
+            overall_crc: None,
         };
 
         assert_eq!(
@@ -866,6 +994,7 @@ mod tests {
             version: 1,
             total_qr_count,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![0xAA],
             payload_bit_len: 8,
@@ -879,6 +1008,7 @@ mod tests {
         let frame1 = Frame::NonFirst {
             total_qr_count,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: vec![0xBB],
             payload_bit_len: 8,
             frame_crc: 0,
@@ -887,25 +1017,21 @@ mod tests {
 
         let mut encoded1 = encode_frame(&frame1, Some(first_crc)).unwrap();
 
-        // 1) Test Corrupt byte containing frame CRC
-        // Header (Start 1b + FrameNum 1b + Varint 7b) = 9b
-        // Payload (8b) = 17b total
-        // Padding (7b) = 24b = 3 bytes
-        // Frame CRC is at bytes 3 and 4. Corrupt byte 3:
         encoded1[3] ^= 0xFF;
 
         let ctx = DecodeContext {
             total_qr_count: Some(total_qr_count),
             first_frame_crc: Some(first_crc),
+            parity_mode: Some(ParityMode::None),
         };
         let err1 = decode_frame(&encoded1, Some(&ctx)).unwrap_err();
         assert!(matches!(err1, FrameError::FrameCrcMismatch { .. }));
 
-        // 2) Test Decoding with modified/wrong First QR CRC
         let re_encoded1 = encode_frame(&frame1, Some(first_crc)).unwrap();
         let wrong_ctx = DecodeContext {
             total_qr_count: Some(total_qr_count),
             first_frame_crc: Some(first_crc ^ 0xFFFF),
+            parity_mode: Some(ParityMode::None),
         };
         let err2 = decode_frame(&re_encoded1, Some(&wrong_ctx)).unwrap_err();
         assert!(matches!(err2, FrameError::FrameCrcMismatch { .. }));
@@ -913,10 +1039,6 @@ mod tests {
 
     #[test]
     fn test_13bit_unaligned_payload_explicit_validation() {
-        // 13-bit Payload: 0b11010010_11011xxx
-        // Top 8 bits: 0b11010010 (0xD2)
-        // Next 5 bits: 0b11011
-        // Lower 3 bits of byte 1 provided in source with noise 111 (0xD7)
         let source_payload = vec![0b11010010, 0b11011111];
         let bit_len = 13;
 
@@ -924,6 +1046,7 @@ mod tests {
             version: 1,
             total_qr_count: 2,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: source_payload,
             payload_bit_len: bit_len,
@@ -932,28 +1055,13 @@ mod tests {
         };
 
         let encoded = encode_frame(&frame, None).unwrap();
-
-        // Inspect bitstream padding & unused bits directly
-        // Header bit length: Start(1) + Ver(4) + StoredCount(16) + FrameNum(1) + DataType(2) + Varint(7) = 31 bits
-        // Payload bit length: 13 bits
-        // Total before padding: 31 + 13 = 44 bits.
-        // Remainder modulo 8: 44 % 8 = 4 bits.
-        // Padding bits needed: 8 - 4 = 4 zero bits.
-        // Total bits including padding = 48 bits (6 full bytes).
-        // Check byte 5 (the last byte containing payload remainder + padding bits):
-        // In byte 5: top 4 bits are payload remainder bits 0b1011, next 4 bits are 0 padding -> 0b10110000 (176 / 0xB0).
-        assert_eq!(encoded[5], 0b10110000);
-
         let decoded = decode_frame(&encoded, None).unwrap();
 
-        // Verify decoded properties
         assert_eq!(decoded.payload_bit_len(), 13);
         let decoded_payload = decoded.payload_bytes();
         assert_eq!(decoded_payload[0], 0b11010010);
-        // Payload unused bits in decoded payload buffer should be 0
         assert_eq!(decoded_payload[1], 0b11011000);
 
-        // Verify bit by bit reading
         let mut reader = BitReader::new_with_bit_len(decoded_payload, 13).unwrap();
         assert_eq!(reader.read_bits(8).unwrap(), 0b11010010);
         assert_eq!(reader.read_bits(5).unwrap(), 0b11011);
@@ -966,6 +1074,7 @@ mod tests {
             version: 0,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![],
             payload_bit_len: 0,
@@ -985,6 +1094,7 @@ mod tests {
             version: 1,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![0xC0],
             payload_bit_len: 2,
@@ -993,8 +1103,7 @@ mod tests {
         };
 
         let mut encoded = encode_frame(&frame2, None).unwrap();
-        // Set a padding bit to 1 in byte 4:
-        encoded[4] |= 0x40; // set bit 6 of byte 4 to 1 (padding)
+        encoded[4] |= 0x08;
 
         let res = decode_frame(&encoded, None);
         assert_eq!(res.unwrap_err(), FrameError::InvalidPadding);
@@ -1006,6 +1115,7 @@ mod tests {
             version: 1,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![0x12, 0x34],
             payload_bit_len: 16,
@@ -1014,8 +1124,7 @@ mod tests {
         };
 
         let mut encoded = encode_frame(&frame, None).unwrap();
-        // Corrupt byte 4 (which is fully payload bits, so padding remains valid)
-        encoded[4] ^= 0xFF;
+        encoded[5] ^= 0xFF;
 
         let res = decode_frame(&encoded, None);
         assert!(matches!(
@@ -1029,7 +1138,8 @@ mod tests {
         let total_qr_count = 3;
         let frame = Frame::NonFirst {
             total_qr_count,
-            frame_number: 3, // Out of range: 0, 1, 2 valid
+            frame_number: 3,
+            is_parity: false,
             payload_bytes: vec![],
             payload_bit_len: 0,
             frame_crc: 0,
@@ -1050,6 +1160,7 @@ mod tests {
         let frame = Frame::NonFirst {
             total_qr_count: 2,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: vec![],
             payload_bit_len: 0,
             frame_crc: 0,
@@ -1067,6 +1178,7 @@ mod tests {
             version: 1,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![],
             payload_bit_len: 0,
@@ -1088,6 +1200,7 @@ mod tests {
             version: 1,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![0x12],
             payload_bit_len: 8,
@@ -1096,7 +1209,6 @@ mod tests {
         };
 
         let mut encoded = encode_frame(&frame, None).unwrap();
-        // Append extra trailing garbage bytes
         encoded.extend_from_slice(&[0xFF, 0xEE, 0xDD]);
 
         let decoded = decode_frame(&encoded, None).unwrap();
@@ -1113,6 +1225,7 @@ mod tests {
             version: 1,
             total_qr_count: 1,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: payload.to_vec(),
             payload_bit_len: payload.len() * 8,
@@ -1140,6 +1253,7 @@ mod tests {
             version: 1,
             total_qr_count: 3,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: p0.to_vec(),
             payload_bit_len: p0.len() * 8,
@@ -1150,6 +1264,7 @@ mod tests {
         let frame1 = Frame::NonFirst {
             total_qr_count: 3,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: p1.to_vec(),
             payload_bit_len: p1.len() * 8,
             frame_crc: 0x2222,
@@ -1159,6 +1274,7 @@ mod tests {
         let frame2 = Frame::NonFirst {
             total_qr_count: 3,
             frame_number: 2,
+            is_parity: false,
             payload_bytes: p2.to_vec(),
             payload_bit_len: p2.len() * 8,
             frame_crc: 0x3333,
@@ -1175,19 +1291,17 @@ mod tests {
 
     #[test]
     fn test_overall_crc_unaligned_frame_boundaries_13_plus_11() {
-        // 24 bits total: 0xD2, 0xAF, 0x55
-        // Frame 0: 13 bits -> top 13 bits: 0xD2 (8b) + 0xA8 (top 5b of 0xAF: 10101xxx)
-        // Frame 1: 11 bits -> lower 11 bits: bottom 3b of 0xAF (111xxx) + 0x55 (8b) -> 11101010 101xxxxx (0xEA, 0xA0)
         let total_payload = [0xD2, 0xAF, 0x55];
         let expected_crc = crate::crc::crc32(&total_payload);
 
-        let frame0_payload = vec![0xD2, 0xA8]; // 13 bits
-        let frame1_payload = vec![0xEA, 0xA0]; // 11 bits (3 bits + 8 bits = 11 bits)
+        let frame0_payload = vec![0xD2, 0xA8];
+        let frame1_payload = vec![0xEA, 0xA0];
 
         let frame0 = Frame::First {
             version: 1,
             total_qr_count: 2,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: frame0_payload,
             payload_bit_len: 13,
@@ -1198,6 +1312,7 @@ mod tests {
         let frame1 = Frame::NonFirst {
             total_qr_count: 2,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: frame1_payload,
             payload_bit_len: 11,
             frame_crc: 0x2000,
@@ -1205,7 +1320,7 @@ mod tests {
         };
 
         let frames = vec![frame0, frame1];
-        let concatenated = concat_payload_bits(&frames).unwrap();
+        let concatenated = concat_data_payload_bits(&frames).unwrap();
         assert_eq!(concatenated.bit_len(), 24);
         assert_eq!(concatenated.as_bytes(), &total_payload);
 
@@ -1226,6 +1341,7 @@ mod tests {
             version: 1,
             total_qr_count: 3,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: p0.to_vec(),
             payload_bit_len: p0.len() * 8,
@@ -1233,10 +1349,10 @@ mod tests {
             overall_crc: None,
         };
 
-        // Frame 1 has 0 bits payload
         let frame1 = Frame::NonFirst {
             total_qr_count: 3,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: vec![],
             payload_bit_len: 0,
             frame_crc: 0x2222,
@@ -1246,6 +1362,7 @@ mod tests {
         let frame2 = Frame::NonFirst {
             total_qr_count: 3,
             frame_number: 2,
+            is_parity: false,
             payload_bytes: p2.to_vec(),
             payload_bit_len: p2.len() * 8,
             frame_crc: 0x3333,
@@ -1260,12 +1377,13 @@ mod tests {
 
     #[test]
     fn test_overall_crc_total_payload_zero_bits() {
-        let expected_crc = crate::crc::crc32_bits(&[], 0); // 0x00000000
+        let expected_crc = crate::crc::crc32_bits(&[], 0);
 
         let frame0 = Frame::First {
             version: 1,
             total_qr_count: 2,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![],
             payload_bit_len: 0,
@@ -1276,6 +1394,7 @@ mod tests {
         let frame1 = Frame::NonFirst {
             total_qr_count: 2,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: vec![],
             payload_bit_len: 0,
             frame_crc: 0x2222,
@@ -1297,6 +1416,7 @@ mod tests {
             version: 1,
             total_qr_count: 3,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: b"Sor".to_vec(),
             payload_bit_len: 24,
@@ -1307,6 +1427,7 @@ mod tests {
         let frame1 = Frame::NonFirst {
             total_qr_count: 3,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: b"ted".to_vec(),
             payload_bit_len: 24,
             frame_crc: 0x2000,
@@ -1316,13 +1437,13 @@ mod tests {
         let frame2 = Frame::NonFirst {
             total_qr_count: 3,
             frame_number: 2,
+            is_parity: false,
             payload_bytes: b"Bits".to_vec(),
             payload_bit_len: 32,
             frame_crc: 0x3000,
             overall_crc: Some(expected_crc),
         };
 
-        // Pass out of order: [frame2, frame0, frame1]
         let out_of_order = vec![frame2.clone(), frame0.clone(), frame1.clone()];
         let in_order = vec![frame0, frame1, frame2];
 
@@ -1335,17 +1456,15 @@ mod tests {
 
     #[test]
     fn test_overall_crc_ignore_trailing_unused_bits_in_payload() {
-        // Frame 0 has payload_bit_len = 5, but payload_bytes contains 0b11010111 (noise in lower 3 bits)
-        // Frame 1 has payload_bit_len = 3, payload_bytes contains 0b10111111 (noise in lower 5 bits)
-        // Total payload = 8 bits: 5 bits (11010) + 3 bits (101) = 0b11010101 (0xD5)
         let expected_crc = crate::crc::crc32(&[0xD5]);
 
         let frame0 = Frame::First {
             version: 1,
             total_qr_count: 2,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
-            payload_bytes: vec![0b11010111], // top 5 bits: 11010
+            payload_bytes: vec![0b11010111],
             payload_bit_len: 5,
             frame_crc: 0x1000,
             overall_crc: None,
@@ -1354,14 +1473,15 @@ mod tests {
         let frame1 = Frame::NonFirst {
             total_qr_count: 2,
             frame_number: 1,
-            payload_bytes: vec![0b10111111], // top 3 bits: 101
+            is_parity: false,
+            payload_bytes: vec![0b10111111],
             payload_bit_len: 3,
             frame_crc: 0x2000,
             overall_crc: Some(expected_crc),
         };
 
         let frames = vec![frame0, frame1];
-        let concatenated = concat_payload_bits(&frames).unwrap();
+        let concatenated = concat_data_payload_bits(&frames).unwrap();
         assert_eq!(concatenated.bit_len(), 8);
         assert_eq!(concatenated.as_bytes(), &[0xD5]);
 
@@ -1372,19 +1492,15 @@ mod tests {
 
     #[test]
     fn test_overall_crc_boundary_invariance() {
-        // 35 bits total payload: 0b10101010_11110000_11001100_00110011_101xx
-        // Splitting into different frame boundaries must result in the exact same overall bitstream & CRC.
         let full_stream = [0b10101010, 0b11110000, 0b11001100, 0b00110011, 0b10100000];
         let expected_crc = crate::crc::crc32_bits(&full_stream, 35);
 
-        // Split Way A: Frame 0 (15 bits), Frame 1 (20 bits)
-        // Way A Frame 0 (15 bits): 0b10101010_1111000x (bytes: [0xAA, 0xF0])
-        // Way A Frame 1 (20 bits): 0b0_11001100_00110011_101xx -> 0b01100110_00011001_11010xxx (bytes: [0x66, 0x19, 0xD0])
         let way_a = vec![
             Frame::First {
                 version: 1,
                 total_qr_count: 2,
                 frame_number: 0,
+                parity_mode: ParityMode::None,
                 data_type: DataType::Uint8Array,
                 payload_bytes: vec![0xAA, 0xF0],
                 payload_bit_len: 15,
@@ -1394,6 +1510,7 @@ mod tests {
             Frame::NonFirst {
                 total_qr_count: 2,
                 frame_number: 1,
+                is_parity: false,
                 payload_bytes: vec![0x66, 0x19, 0xD0],
                 payload_bit_len: 20,
                 frame_crc: 0x2000,
@@ -1401,12 +1518,12 @@ mod tests {
             },
         ];
 
-        // Split Way B: Frame 0 (24 bits), Frame 1 (11 bits)
         let way_b = vec![
             Frame::First {
                 version: 1,
                 total_qr_count: 2,
                 frame_number: 0,
+                parity_mode: ParityMode::None,
                 data_type: DataType::Uint8Array,
                 payload_bytes: vec![0xAA, 0xF0, 0xCC],
                 payload_bit_len: 24,
@@ -1416,6 +1533,7 @@ mod tests {
             Frame::NonFirst {
                 total_qr_count: 2,
                 frame_number: 1,
+                is_parity: false,
                 payload_bytes: vec![0x33, 0xA0],
                 payload_bit_len: 11,
                 frame_crc: 0x2000,
@@ -1440,6 +1558,7 @@ mod tests {
             version: 1,
             total_qr_count: 2,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: payload[..10].to_vec(),
             payload_bit_len: 80,
@@ -1447,10 +1566,10 @@ mod tests {
             overall_crc: None,
         };
 
-        // Match case
         let frame1_match = Frame::NonFirst {
             total_qr_count: 2,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: payload[10..].to_vec(),
             payload_bit_len: (payload.len() - 10) * 8,
             frame_crc: 0x2000,
@@ -1462,10 +1581,10 @@ mod tests {
             Ok(true)
         );
 
-        // Mismatch case
         let frame1_mismatch = Frame::NonFirst {
             total_qr_count: 2,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: payload[10..].to_vec(),
             payload_bit_len: (payload.len() - 10) * 8,
             frame_crc: 0x2000,
@@ -1477,14 +1596,13 @@ mod tests {
 
     #[test]
     fn test_overall_crc_invalid_frame_sets() {
-        // 1) Empty frames
         assert_eq!(calculate_overall_crc(&[]), Err(FrameError::EmptyFrames));
 
-        // 2) Missing frame (expected 3, provided 2)
         let f0 = Frame::First {
             version: 1,
             total_qr_count: 3,
             frame_number: 0,
+            parity_mode: ParityMode::None,
             data_type: DataType::Uint8Array,
             payload_bytes: vec![0x01],
             payload_bit_len: 8,
@@ -1494,6 +1612,7 @@ mod tests {
         let f2 = Frame::NonFirst {
             total_qr_count: 3,
             frame_number: 2,
+            is_parity: false,
             payload_bytes: vec![0x02],
             payload_bit_len: 8,
             frame_crc: 0x3000,
@@ -1501,17 +1620,14 @@ mod tests {
         };
         assert_eq!(
             calculate_overall_crc(&[f0.clone(), f2.clone()]),
-            Err(FrameError::IncompleteFrameSet {
-                expected: 3,
-                actual: 2
-            })
+            Err(FrameError::MissingFrameNumber(1))
         );
 
-        // 3) Duplicate frame number
         let f0_dup = f0.clone();
         let f1 = Frame::NonFirst {
             total_qr_count: 3,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: vec![0x03],
             payload_bit_len: 8,
             frame_crc: 0x2000,
@@ -1522,10 +1638,10 @@ mod tests {
             Err(FrameError::DuplicateFrameNumber(0))
         );
 
-        // 4) Mismatched total QR count
         let f1_wrong_total = Frame::NonFirst {
-            total_qr_count: 2, // Mismatch with 3
+            total_qr_count: 2,
             frame_number: 1,
+            is_parity: false,
             payload_bytes: vec![0x03],
             payload_bit_len: 8,
             frame_crc: 0x2000,
@@ -1535,7 +1651,7 @@ mod tests {
             calculate_overall_crc(&[f0, f1_wrong_total, f2]),
             Err(FrameError::MismatchedTotalQrCount {
                 expected: 3,
-                actual: 2
+                actual: 2,
             })
         );
     }

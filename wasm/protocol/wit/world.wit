@@ -20,9 +20,11 @@ interface protocol {
 
     record frame-metadata {
         is-first: bool,
+        is-parity: bool,
         version: u8,
         total-qr-count: u32,
         frame-number: u32,
+        parity-mode: option<u8>,
         data-type: option<data-type>,
         payload-bit-len: u32,
         frame-crc: u16,
@@ -45,12 +47,12 @@ interface protocol {
         frames: list<encoded-frame-output>,
     }
 
-    // 入力された生のバイトまたは文字列を、max-frame-bits に基づいてスプリット ワイヤー フレームにエンコードします。
-    encode-bytes: func(data: list<u8>, max-frame-bits: u32) -> result<encode-result, string>;
-    encode-text: func(text: string, max-frame-bits: u32) -> result<encode-result, string>;
+    // 入力された生のバイトまたは文字列を、max-frame-bits および parity-mode に基づいてスプリット ワイヤー フレームにエンコードします。
+    encode-bytes: func(data: list<u8>, max-frame-bits: u32, parity-mode: u8) -> result<encode-result, string>;
+    encode-text: func(text: string, max-frame-bits: u32, parity-mode: u8) -> result<encode-result, string>;
 
     // 単一のワイヤー フレームのメタデータを解析し、その CRC を検証します。
-    parse-frame: func(wire-bytes: list<u8>, known-total-qr-count: option<u32>, known-first-frame-crc: option<u16>) -> result<frame-metadata, string>;
+    parse-frame: func(wire-bytes: list<u8>, known-total-qr-count: option<u32>, known-first-frame-crc: option<u16>, known-parity-mode: option<u8>) -> result<frame-metadata, string>;
 
     // ワイヤー フレームの完全なリストを復元されたデータ (Uint8Array または String) にデコードします。
     decode-frames: func(wire-frames: list<list<u8>>) -> result<decoded-payload, string>;

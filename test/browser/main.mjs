@@ -5,6 +5,7 @@ const qrVersionInput = document.getElementById("qr-version");
 const ecLevelSelect = document.getElementById("ec-level");
 const calcMaxFrameBitsSpan = document.getElementById("calc-max-frame-bits");
 const intervalMsInput = document.getElementById("interval-ms");
+const parityModeSelect = document.getElementById("parity-mode");
 const maxCrcErrorsInput = document.getElementById("max-crc-errors");
 const cameraFacingSelect = document.getElementById("camera-facing");
 const cameraDeviceSelect = document.getElementById("camera-device");
@@ -267,6 +268,7 @@ btnStartSend.addEventListener("click", async () => {
 		const qrVersion = Number(qrVersionInput.value);
 		const ecLevel = ecLevelSelect.value;
 		const intervalMs = Number(intervalMsInput.value);
+		const parityMode = Number(parityModeSelect ? parityModeSelect.value : 0);
 
 		let payload;
 		if (inputType === "string") {
@@ -286,6 +288,7 @@ btnStartSend.addEventListener("click", async () => {
 			qrVersion,
 			ecLevel,
 			intervalMs,
+			parityMode,
 			canvas: "qr-canvas",
 			renderOptions: {
 				width: dims.width,
@@ -293,7 +296,7 @@ btnStartSend.addEventListener("click", async () => {
 			},
 		});
 
-		log(`Started sending payload (${inputType}, V${qrVersion}, ${dims.width}x${dims.height}px).`);
+		log(`Started sending payload (${inputType}, V${qrVersion}, parityMode: ${parityMode}, ${dims.width}x${dims.height}px).`);
 	} catch (err) {
 		log(`Failed to start sender: ${String(err)}`);
 	}
