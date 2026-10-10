@@ -436,8 +436,8 @@ declare class TransportApi {
     private emitError;
     private emitComplete;
     private workerClient;
-    private shouldUseWorker;
     private getOrCreateWorkerClient;
+    private shouldUseWorker;
     startSend(data: Uint8Array | string, options?: SendOptions): Promise<void>;
     getCurrentSendFrame(): Uint8Array | null;
     stopSend(): void;

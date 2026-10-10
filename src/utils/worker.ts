@@ -162,6 +162,14 @@ function getResponseData(event: any): WorkerResponseMessage {
 	return (event && typeof event === "object" && "data" in event ? event.data : event) as WorkerResponseMessage;
 }
 
+export function isWorkerSupported(options: WorkerClientOptions = {}): boolean {
+	if (options.createWorker) return true;
+	if (isNodeEnvironment()) {
+		return Boolean(options.workerUrl);
+	}
+	return typeof globalThis.Worker === "function";
+}
+
 export class WorkerClient {
 	private worker: WorkerLike | null = null;
 	private listeners: WorkerListeners | null = null;
@@ -178,8 +186,8 @@ export class WorkerClient {
 
 	constructor(options: WorkerClientOptions = {}) {
 		this.options = options;
-		this.enabled = options.enabled === true;
-		this.fallback = options.fallback !== false;
+		this.enabled = !!options.enabled && isWorkerSupported(options);
+		this.fallback = !!options.fallback;
 		this.timeout = options.timeout ?? DEFAULT_TIMEOUT;
 	}
 
@@ -516,12 +524,7 @@ export async function handleWorkerMessage(msg: WorkerRequestMessage): Promise<Wo
 			case "encodeBytes": {
 				const { data, maxFrameBits, qrVersion, ecLevel, parityMode } = msg.payload;
 
-				result = DataApi.encodeBytes(
-					data instanceof Uint8Array ? data : new Uint8Array(data),
-					qrVersion ?? maxFrameBits,
-					ecLevel,
-					parityMode
-				);
+				result = DataApi.encodeBytes(data instanceof Uint8Array ? data : new Uint8Array(data), qrVersion ?? maxFrameBits, ecLevel, parityMode);
 				break;
 			}
 

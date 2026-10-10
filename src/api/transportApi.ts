@@ -186,24 +186,10 @@ export class TransportApi {
 
 	private workerClient: WorkerClient | null = null;
 
-	private shouldUseWorker(): boolean {
-		if (!this.config.transport.useWorker) return false;
-
-		const g = globalThis as typeof globalThis & {
-			process?: { versions?: { node?: string } };
-		};
-		const isNode = typeof g.process?.versions?.node === "string";
-		if (isNode) {
-			return Boolean(this.config.transport.workerUrl || this.config.transport.createWorker);
-		}
-
-		return typeof Worker === "function";
-	}
-
 	private getOrCreateWorkerClient(): WorkerClient {
 		if (!this.workerClient || this.workerClient.isDisposed) {
 			this.workerClient = new WorkerClient({
-				enabled: true,
+				enabled: this.config.transport.useWorker,
 				fallback: true,
 				workerUrl: this.config.transport.workerUrl,
 				createWorker: this.config.transport.createWorker,
@@ -212,6 +198,11 @@ export class TransportApi {
 			});
 		}
 		return this.workerClient;
+	}
+
+	private shouldUseWorker(): boolean {
+		if (!this.config.transport.useWorker) return false;
+		return this.getOrCreateWorkerClient().isWorkerAvailable;
 	}
 
 	public async startSend(data: Uint8Array | string, options?: SendOptions): Promise<void> {

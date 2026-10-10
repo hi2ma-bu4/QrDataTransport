@@ -10757,6 +10757,13 @@ async function createDefaultWorker(options) {
 function getResponseData(event) {
   return event && typeof event === "object" && "data" in event ? event.data : event;
 }
+function isWorkerSupported(options = {}) {
+  if (options.createWorker) return true;
+  if (isNodeEnvironment()) {
+    return Boolean(options.workerUrl);
+  }
+  return typeof globalThis.Worker === "function";
+}
 var WorkerClient = class {
   worker = null;
   listeners = null;
@@ -10771,8 +10778,8 @@ var WorkerClient = class {
   options;
   constructor(options = {}) {
     this.options = options;
-    this.enabled = options.enabled === true;
-    this.fallback = options.fallback !== false;
+    this.enabled = !!options.enabled && isWorkerSupported(options);
+    this.fallback = !!options.fallback;
     this.timeout = options.timeout ?? DEFAULT_TIMEOUT;
   }
   get isDisposed() {
@@ -11027,12 +11034,7 @@ async function handleWorkerMessage(msg) {
       }
       case "encodeBytes": {
         const { data, maxFrameBits, qrVersion, ecLevel, parityMode } = msg.payload;
-        result = DataApi.encodeBytes(
-          data instanceof Uint8Array ? data : new Uint8Array(data),
-          qrVersion ?? maxFrameBits,
-          ecLevel,
-          parityMode
-        );
+        result = DataApi.encodeBytes(data instanceof Uint8Array ? data : new Uint8Array(data), qrVersion ?? maxFrameBits, ecLevel, parityMode);
         break;
       }
       case "encodeText": {
@@ -11202,19 +11204,10 @@ var TransportApi = class {
   // Sender Implementation
   // ------------------------------------------------------------------
   workerClient = null;
-  shouldUseWorker() {
-    if (!this.config.transport.useWorker) return false;
-    const g = globalThis;
-    const isNode2 = typeof g.process?.versions?.node === "string";
-    if (isNode2) {
-      return Boolean(this.config.transport.workerUrl || this.config.transport.createWorker);
-    }
-    return typeof Worker === "function";
-  }
   getOrCreateWorkerClient() {
     if (!this.workerClient || this.workerClient.isDisposed) {
       this.workerClient = new WorkerClient({
-        enabled: true,
+        enabled: this.config.transport.useWorker,
         fallback: true,
         workerUrl: this.config.transport.workerUrl,
         createWorker: this.config.transport.createWorker,
@@ -11223,6 +11216,10 @@ var TransportApi = class {
       });
     }
     return this.workerClient;
+  }
+  shouldUseWorker() {
+    if (!this.config.transport.useWorker) return false;
+    return this.getOrCreateWorkerClient().isWorkerAvailable;
   }
   async startSend(data, options) {
     if (this.sendTimer !== null) {
