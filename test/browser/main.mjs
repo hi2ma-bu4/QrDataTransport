@@ -1,4 +1,4 @@
-import { BrowserRuntimeApi, DataApi, TransportApi } from "../../dist/QrDataTransport.js";
+import { AppConfig, BrowserRuntimeApi, DataApi, TransportApi } from "../../dist/QrDataTransport.js";
 
 const inputTypeSelect = document.getElementById("input-type");
 const qrVersionInput = document.getElementById("qr-version");
@@ -44,6 +44,15 @@ const panelReceiver = document.getElementById("panel-receiver");
 
 const runtime = new BrowserRuntimeApi();
 const transport = new TransportApi(undefined, runtime);
+
+// テストページでコンソールからユーザーが触れるように設定
+window.AppConfig = AppConfig;
+window.DataApi = DataApi;
+window.TransportApi = TransportApi;
+window.BrowserRuntimeApi = BrowserRuntimeApi;
+
+window.runtime = runtime;
+window.transport = transport;
 
 let latestFrameEvent = {
 	validCount: 0,
