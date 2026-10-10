@@ -216,8 +216,8 @@ export class BrowserRuntimeApi implements RuntimeApi {
 		this.cameraVideo.setAttribute("playsinline", "true");
 		await this.cameraVideo.play();
 
-		const offscreenCanvas = document.createElement("canvas");
-		const offscreenCtx = offscreenCanvas.getContext("2d", { willReadFrequently: true });
+		const canvas = document.createElement("canvas");
+		const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
 		const fps = options?.fps && options.fps > 0 ? options.fps : 30;
 		const intervalMs = 1000 / fps;
@@ -233,12 +233,12 @@ export class BrowserRuntimeApi implements RuntimeApi {
 				const vWidth = this.cameraVideo.videoWidth;
 				const vHeight = this.cameraVideo.videoHeight;
 
-				if (vWidth > 0 && vHeight > 0 && offscreenCtx) {
-					offscreenCanvas.width = vWidth;
-					offscreenCanvas.height = vHeight;
-					offscreenCtx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
+				if (vWidth > 0 && vHeight > 0 && ctx) {
+					canvas.width = vWidth;
+					canvas.height = vHeight;
+					ctx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
 
-					const imgData = offscreenCtx.getImageData(0, 0, vWidth, vHeight);
+					const imgData = ctx.getImageData(0, 0, vWidth, vHeight);
 
 					// Render raw video preview and optional custom overlay if previewCanvas is provided
 					if (options?.previewCanvas) {
