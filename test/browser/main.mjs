@@ -141,6 +141,7 @@ transport.onComplete((res) => {
 			receivedTextarea.style.display = "block";
 		}
 		if (downloadFileBtn) {
+			URL.revokeObjectURL(downloadFileBtn.href);
 			downloadFileBtn.style.display = "none";
 		}
 	} else {
@@ -148,10 +149,20 @@ transport.onComplete((res) => {
 			receivedTextarea.style.display = "none";
 		}
 		if (downloadFileBtn) {
-			const blob = new Blob([res.data], { type: "application/octet-stream" });
-			downloadFileBtn.href = URL.createObjectURL(blob);
-			downloadFileBtn.download = `received_file_${Date.now()}.bin`;
-			downloadFileBtn.style.display = "inline-block";
+			try {
+				const { name, data } = BrowserRuntimeApi.unpackUint8ArrayToFile(res.data);
+				const blob = new Blob([data], {
+					type: "application/octet-stream",
+				});
+
+				downloadFileBtn.href = URL.createObjectURL(blob);
+				downloadFileBtn.download = name;
+				downloadFileBtn.style.display = "inline-block";
+			} catch (err) {
+				downloadFileBtn.style.display = "none";
+				log(`[ERROR] Failed to unpack received file: ${String(err)}`);
+				alert("Failed to unpack received file. See log for details.");
+			}
 		}
 	}
 });
@@ -279,7 +290,7 @@ btnStartSend.addEventListener("click", async () => {
 				alert("Please select a file first");
 				return;
 			}
-			payload = new Uint8Array(await file.arrayBuffer());
+			payload = await BrowserRuntimeApi.packFileToUint8Array(file);
 		}
 
 		const dims = computeOptimalCanvasDimensions("qr-canvas");

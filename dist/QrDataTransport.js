@@ -10206,9 +10206,38 @@ var protocol = {
 
 // src/api/browserRuntimeApi.ts
 var BrowserRuntimeApi = class {
+  static HEADER_SIZE = 2;
+  static MAX_FILENAME_LENGTH = 65535;
   cameraStream = null;
   cameraVideo = null;
   cameraAnimationId = null;
+  static async packFileToUint8Array(file) {
+    const filenameEncoder = new TextEncoder();
+    const filename = filenameEncoder.encode(file.name);
+    if (filename.length > this.MAX_FILENAME_LENGTH) {
+      throw new RangeError(`The filename exceeds ${this.MAX_FILENAME_LENGTH} bytes.`);
+    }
+    const fileData = new Uint8Array(await file.arrayBuffer());
+    const result = new Uint8Array(this.HEADER_SIZE + filename.length + fileData.length);
+    new DataView(result.buffer).setUint16(0, filename.length, false);
+    result.set(filename, this.HEADER_SIZE);
+    result.set(fileData, this.HEADER_SIZE + filename.length);
+    return result;
+  }
+  static unpackUint8ArrayToFile(packed) {
+    if (packed.length < this.HEADER_SIZE) {
+      throw new RangeError("Data is too short to contain a valid header.");
+    }
+    const filenameLength = new DataView(packed.buffer, packed.byteOffset, this.HEADER_SIZE).getUint16(0, false);
+    if (filenameLength > packed.length - this.HEADER_SIZE) {
+      throw new RangeError("Filename length exceeds the available data.");
+    }
+    const filenameEnd = this.HEADER_SIZE + filenameLength;
+    const filenameDecoder = new TextDecoder("utf-8", { fatal: true });
+    const name = filenameDecoder.decode(packed.subarray(this.HEADER_SIZE, filenameEnd));
+    const data = packed.subarray(filenameEnd);
+    return { name, data };
+  }
   resolveCanvas(canvasTarget) {
     if (typeof document === "undefined") {
       return null;

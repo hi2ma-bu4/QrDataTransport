@@ -125,9 +125,16 @@ interface RuntimeApi {
     getAvailableVideoDevices?(): Promise<MediaDeviceInfo[]>;
 }
 declare class BrowserRuntimeApi implements RuntimeApi {
+    static readonly HEADER_SIZE = 2;
+    static readonly MAX_FILENAME_LENGTH = 65535;
     private cameraStream;
     private cameraVideo;
     private cameraAnimationId;
+    static packFileToUint8Array(file: File): Promise<Uint8Array>;
+    static unpackUint8ArrayToFile(packed: Uint8Array): {
+        name: string;
+        data: Uint8Array;
+    };
     private resolveCanvas;
     renderQrModuleMatrix(matrix: QrModuleMatrixData, options?: RenderQrOptions): void;
     clearCanvas(canvasTarget?: HTMLCanvasElement | string): void;
