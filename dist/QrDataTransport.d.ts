@@ -375,13 +375,10 @@ declare class TransportApi {
     private checkCompletion;
 }
 
-/**
- * Worker helper utilities and self-worker message handler.
- * Supports Node.js worker_threads, Browser Web Workers, Module Worker, and Blob Worker fallback.
- */
+type WorkerRequestType = "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage";
 interface WorkerRequestMessage {
     id: string;
-    type: "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage";
+    type: WorkerRequestType;
     payload: any;
 }
 interface WorkerResponseMessage {
@@ -391,17 +388,63 @@ interface WorkerResponseMessage {
     result?: any;
     error?: string;
 }
-declare function isWorkerContext(): boolean;
+type WorkerMode = "auto" | "module" | "classic";
+type WorkerLike = {
+    postMessage(message: any, transfer?: Transferable[]): void;
+    terminate(): unknown;
+    addEventListener?: (type: string, listener: (event: any) => void) => void;
+    removeEventListener?: (type: string, listener: (event: any) => void) => void;
+    on?: (type: string, listener: (...args: any[]) => void) => unknown;
+    off?: (type: string, listener: (...args: any[]) => void) => unknown;
+};
+interface WorkerClientOptions {
+    /** Worker を使用するか。既定値 false */
+    enabled?: boolean;
+    /** Worker の生成・実行に失敗した場合、直接実行へフォールバックするか。既定値 true */
+    fallback?: boolean;
+    /** Worker の URL。Node.js では原則として指定が必要 */
+    workerUrl?: string | URL;
+    /** Worker を独自に生成する場合の関数 */
+    createWorker?: () => WorkerLike | Promise<WorkerLike>;
+    /** ブラウザ Worker の形式。auto は読み込み元の script 要素から推定 */
+    workerType?: WorkerMode;
+    /** Worker の応答タイムアウト。0 以下なら無効。既定値 30000ms */
+    timeout?: number;
+    /** URL 検索に使うライブラリのファイル名。既定値 QrDataTransport */
+    libraryFileName?: string;
+}
+declare class WorkerClient {
+    private worker;
+    private listeners;
+    private creating;
+    private disposed;
+    private failed;
+    private sequence;
+    private readonly pending;
+    private readonly enabled;
+    private readonly fallback;
+    private readonly timeout;
+    private readonly options;
+    constructor(options?: WorkerClientOptions);
+    get isDisposed(): boolean;
+    get isWorkerAvailable(): boolean;
+    private nextId;
+    private getWorker;
+    private attachListeners;
+    private detachListeners;
+    private settleFallback;
+    private failWorker;
+    request(type: WorkerRequestType, payload: any, transfer?: Transferable[], fallbackPayload?: any): Promise<any>;
+    private executeFallback;
+    decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Promise<Uint8Array>;
+    dispose(): void;
+}
 declare function handleWorkerMessage(msg: WorkerRequestMessage): Promise<WorkerResponseMessage>;
-declare function setupWorkerSelfListener(): void;
 /**
- * Helper to execute decodeQrImage on a Worker instance offloading image decoding from the main thread.
+ * ブラウザ Worker / Node.js worker_threads でのみ受信ハンドラーを登録する。
+ * メインスレッドでは何も登録しない。
  */
-declare function decodeQrImageInWorker(worker: Worker | {
-    postMessage: (msg: any) => void;
-    addEventListener?: (type: string, listener: (evt: any) => void) => void;
-    on?: (type: string, listener: (msg: any) => void) => void;
-}, rgbaPixels: Uint8Array, width: number, height: number): Promise<Uint8Array>;
+declare function setupWorkerSelfListener(): Promise<void>;
 
-export { AppConfig, BrowserRuntimeApi, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, decodeQrImageInWorker, handleWorkerMessage, isWorkerContext, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener };
-export type { CameraOptions, DecodedResult, ErrorCode, ReceiveOptions, RenderQrOptions, RuntimeApi, SendOptions, TransportError, TransportState, TransportWarning, WarningCode };
+export { AppConfig, BrowserRuntimeApi, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, WorkerClient, handleWorkerMessage, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener };
+export type { CameraOptions, DecodedResult, ErrorCode, ReceiveOptions, RenderQrOptions, RuntimeApi, SendOptions, TransportError, TransportState, TransportWarning, WarningCode, WorkerClientOptions };

@@ -1,10 +1,11 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { DataApi, decodeQrImageInWorker, handleWorkerMessage, isWorkerContext } from "../../dist/QrDataTransport.js";
+import { DataApi, handleWorkerMessage, WorkerClient } from "../../dist/QrDataTransport.js";
 
 test("Worker Context detection helper", () => {
 	// In standard Node main thread
-	assert.equal(typeof isWorkerContext(), "boolean");
+	const workerC = new WorkerClient({ enabled: true });
+	assert.equal(typeof workerC.isWorkerAvailable, "boolean");
 });
 
 test("handleWorkerMessage handles parseFrame", async () => {
@@ -52,29 +53,10 @@ test("handleWorkerMessage handles error response", async () => {
 });
 
 test("handleWorkerMessage handles decodeQrImage request and decodeQrImageInWorker helper", async () => {
-	// Mock worker object to test decodeQrImageInWorker
-	const mockListeners: ((msg: any) => void)[] = [];
-	const mockWorker = {
-		postMessage: async (msg: any) => {
-			const res = await handleWorkerMessage(msg);
-			for (const l of mockListeners) {
-				l(res);
-			}
-		},
-		on: (event: string, cb: (msg: any) => void) => {
-			if (event === "message") mockListeners.push(cb);
-		},
-		off: (event: string, cb: (msg: any) => void) => {
-			if (event === "message") {
-				const idx = mockListeners.indexOf(cb);
-				if (idx >= 0) mockListeners.splice(idx, 1);
-			}
-		},
-	};
-
 	// Decoding an invalid pixel buffer should reject gracefully
 	const dummyPixels = new Uint8Array(10 * 10 * 4);
 	await assert.rejects(async () => {
-		await decodeQrImageInWorker(mockWorker as any, dummyPixels, 10, 10);
+		const workerClient = new WorkerClient({ enabled: true });
+		await workerClient.decodeQrImage(dummyPixels, 10, 10);
 	});
 });

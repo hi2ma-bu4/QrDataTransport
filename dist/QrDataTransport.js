@@ -11139,41 +11139,341 @@ var TransportApi = class {
 };
 
 // src/utils/worker.ts
-function isWorkerContext() {
-  if (typeof self !== "undefined" && typeof window === "undefined") {
-    return true;
+var DEFAULT_TIMEOUT = 3e4;
+var INITIAL_SCRIPT_INFO = (() => {
+  if (typeof document === "undefined") {
+    return void 0;
   }
+  const current = document.currentScript;
+  if (current instanceof HTMLScriptElement && current.src) {
+    return {
+      url: current.src,
+      type: current.type === "module" ? "module" : "classic"
+    };
+  }
+  return void 0;
+})();
+function isNodeEnvironment() {
   const g = globalThis;
-  if (g.process && g.process.versions && g.process.versions.node) {
-    try {
-      const req = globalThis.require;
-      if (typeof req === "function") {
-        const workerThreads = req("node:worker_threads");
-        return !workerThreads.isMainThread;
-      }
-    } catch {
-      return false;
+  return typeof g.process?.versions?.node === "string";
+}
+function toError(error2) {
+  return error2 instanceof Error ? error2 : new Error(String(error2));
+}
+function resolveBrowserWorkerInfo(options) {
+  let url = options.workerUrl ?? INITIAL_SCRIPT_INFO?.url;
+  let detectedType = INITIAL_SCRIPT_INFO?.type;
+  if (!url && typeof document !== "undefined") {
+    const scripts = document.scripts;
+    const fileName = options.libraryFileName ?? "QrDataTransport";
+    const escapedName = fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`(?:^|/)${escapedName}(?:\\.min)?\\.(?:js|mjs)(?:[?#].*)?$`, "i");
+    for (let i = scripts.length - 1; i >= 0; i--) {
+      const script = scripts[i];
+      if (!script.src || !pattern.test(script.src)) continue;
+      url = script.src;
+      detectedType = script.type === "module" || /\.mjs(?:[?#]|$)/i.test(script.src) ? "module" : "classic";
+      break;
     }
   }
-  return false;
+  if (!url) {
+    throw new Error("Worker URL \u3092\u89E3\u6C7A\u3067\u304D\u307E\u305B\u3093\u3002workerUrl \u307E\u305F\u306F createWorker \u3092\u6307\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+  }
+  const requestedType = options.workerType ?? "auto";
+  const type = requestedType === "auto" ? detectedType ?? "module" : requestedType;
+  return { url, type };
 }
+async function createDefaultWorker(options) {
+  if (isNodeEnvironment()) {
+    if (!options.workerUrl) {
+      throw new Error("Node.js Worker \u3067\u306F workerUrl \u307E\u305F\u306F createWorker \u304C\u5FC5\u8981\u3067\u3059\u3002");
+    }
+    const specifier = "node:worker_threads";
+    const nodeModule = await import(specifier);
+    return new nodeModule.Worker(options.workerUrl);
+  }
+  if (typeof globalThis.Worker !== "function") {
+    throw new Error("\u3053\u306E\u74B0\u5883\u3067\u306F\u30D6\u30E9\u30A6\u30B6 Worker \u3092\u5229\u7528\u3067\u304D\u307E\u305B\u3093\u3002");
+  }
+  const info = resolveBrowserWorkerInfo(options);
+  return new globalThis.Worker(info.url, {
+    type: info.type
+  });
+}
+function getResponseData(event) {
+  return event && typeof event === "object" && "data" in event ? event.data : event;
+}
+var WorkerClient = class {
+  worker = null;
+  listeners = null;
+  creating = null;
+  disposed = false;
+  failed = false;
+  sequence = 0;
+  pending = /* @__PURE__ */ new Map();
+  enabled;
+  fallback;
+  timeout;
+  options;
+  constructor(options = {}) {
+    this.options = options;
+    this.enabled = options.enabled === true;
+    this.fallback = options.fallback !== false;
+    this.timeout = options.timeout ?? DEFAULT_TIMEOUT;
+  }
+  get isDisposed() {
+    return this.disposed;
+  }
+  get isWorkerAvailable() {
+    return this.enabled && !this.disposed && !this.failed;
+  }
+  nextId() {
+    return `qr-${Date.now()}-${++this.sequence}`;
+  }
+  async getWorker() {
+    if (this.disposed) {
+      throw new Error("WorkerClient has been disposed.");
+    }
+    if (this.failed) {
+      throw new Error("Worker is unavailable.");
+    }
+    if (this.worker) return this.worker;
+    if (this.creating) return this.creating;
+    this.creating = (async () => {
+      const worker = this.options.createWorker ? await this.options.createWorker() : await createDefaultWorker(this.options);
+      if (this.disposed) {
+        try {
+          worker.terminate();
+        } catch {
+        }
+        throw new Error("WorkerClient has been disposed.");
+      }
+      this.worker = worker;
+      this.attachListeners(worker);
+      return worker;
+    })().finally(() => {
+      this.creating = null;
+    });
+    return this.creating;
+  }
+  attachListeners(worker) {
+    const listeners = {
+      message: (event) => {
+        const response = getResponseData(event);
+        if (!response || typeof response.id !== "string") return;
+        const task = this.pending.get(response.id);
+        if (!task || task.settled) return;
+        this.pending.delete(response.id);
+        task.settled = true;
+        if (task.timer) clearTimeout(task.timer);
+        if (response.success) {
+          task.resolve(response.result);
+        } else {
+          task.reject(new Error(response.error || "Worker task failed."));
+        }
+      },
+      error: (event) => {
+        this.failWorker(new Error(event?.message || "Worker encountered an error."));
+      },
+      messageerror: () => {
+        this.failWorker(new Error("Worker message deserialization failed."));
+      },
+      exit: (code) => {
+        if (!this.disposed) {
+          this.failWorker(new Error(`Worker exited unexpectedly with code ${code}.`));
+        }
+      }
+    };
+    this.listeners = listeners;
+    if (worker.addEventListener) {
+      worker.addEventListener("message", listeners.message);
+      worker.addEventListener("error", listeners.error);
+      worker.addEventListener("messageerror", listeners.messageerror);
+    } else if (worker.on) {
+      worker.on("message", listeners.message);
+      worker.on("error", listeners.error);
+      worker.on("messageerror", listeners.messageerror);
+      worker.on("exit", listeners.exit);
+    } else {
+      throw new Error("Worker does not support message event listeners.");
+    }
+  }
+  detachListeners(worker) {
+    const listeners = this.listeners;
+    if (!listeners) return;
+    if (worker.removeEventListener) {
+      worker.removeEventListener("message", listeners.message);
+      worker.removeEventListener("error", listeners.error);
+      worker.removeEventListener("messageerror", listeners.messageerror);
+    } else if (worker.off) {
+      worker.off("message", listeners.message);
+      worker.off("error", listeners.error);
+      worker.off("messageerror", listeners.messageerror);
+      worker.off("exit", listeners.exit);
+    }
+    this.listeners = null;
+  }
+  settleFallback(id2, task) {
+    if (task.settled) return;
+    task.settled = true;
+    this.pending.delete(id2);
+    if (task.timer) clearTimeout(task.timer);
+    if (!this.fallback) {
+      task.reject(new Error("Worker failed and fallback is disabled."));
+      return;
+    }
+    void this.executeFallback(task.type, task.payload).then(task.resolve, (error2) => task.reject(toError(error2)));
+  }
+  failWorker(error2) {
+    if (this.failed || this.disposed) return;
+    this.failed = true;
+    const worker = this.worker;
+    this.worker = null;
+    if (worker) {
+      this.detachListeners(worker);
+      try {
+        worker.terminate();
+      } catch {
+      }
+    }
+    const tasks = Array.from(this.pending.entries());
+    for (const [id2, task] of tasks) {
+      if (task.settled) continue;
+      this.settleFallback(id2, task);
+    }
+    void error2;
+  }
+  async request(type, payload, transfer = [], fallbackPayload = payload) {
+    if (this.disposed) {
+      throw new Error("WorkerClient has been disposed.");
+    }
+    if (!this.enabled || this.failed) {
+      if (!this.fallback) {
+        throw new Error("Worker is disabled or unavailable.");
+      }
+      return this.executeFallback(type, fallbackPayload);
+    }
+    let worker;
+    try {
+      worker = await this.getWorker();
+    } catch (error2) {
+      if (!this.fallback) throw error2;
+      return this.executeFallback(type, fallbackPayload);
+    }
+    if (this.disposed) {
+      throw new Error("WorkerClient has been disposed.");
+    }
+    if (this.failed) {
+      if (!this.fallback) {
+        throw new Error("Worker is unavailable.");
+      }
+      return this.executeFallback(type, fallbackPayload);
+    }
+    const id2 = this.nextId();
+    return new Promise((resolve, reject) => {
+      const task = {
+        type,
+        payload: fallbackPayload,
+        resolve,
+        reject,
+        settled: false
+      };
+      if (this.timeout > 0) {
+        task.timer = setTimeout(() => {
+          this.failWorker(new Error(`Worker request timed out: ${type}`));
+        }, this.timeout);
+      }
+      this.pending.set(id2, task);
+      try {
+        worker.postMessage({ id: id2, type, payload }, transfer);
+      } catch (error2) {
+        this.failWorker(toError(error2));
+      }
+    });
+  }
+  async executeFallback(type, payload) {
+    if (this.disposed) {
+      throw new Error("WorkerClient has been disposed.");
+    }
+    const response = await handleWorkerMessage({
+      id: this.nextId(),
+      type,
+      payload
+    });
+    if (!response.success) {
+      throw new Error(response.error || "Worker fallback failed.");
+    }
+    return response.result;
+  }
+  async decodeQrImage(rgbaPixels, width, height) {
+    if (!this.enabled || this.failed) {
+      const result2 = await this.request("decodeQrImage", {
+        rgbaPixels,
+        width,
+        height
+      });
+      return result2 instanceof Uint8Array ? result2 : new Uint8Array(result2);
+    }
+    const fallbackPayload = {
+      rgbaPixels,
+      width,
+      height
+    };
+    const transferBuffer = rgbaPixels.slice().buffer;
+    const result = await this.request(
+      "decodeQrImage",
+      {
+        rgbaPixels: transferBuffer,
+        width,
+        height
+      },
+      [transferBuffer],
+      fallbackPayload
+    );
+    return result instanceof Uint8Array ? result : new Uint8Array(result);
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    const worker = this.worker;
+    this.worker = null;
+    if (worker) {
+      this.detachListeners(worker);
+      try {
+        worker.terminate();
+      } catch {
+      }
+    }
+    const error2 = new Error("WorkerClient has been disposed.");
+    for (const [id2, task] of this.pending) {
+      this.pending.delete(id2);
+      if (task.settled) continue;
+      task.settled = true;
+      if (task.timer) clearTimeout(task.timer);
+      task.reject(error2);
+    }
+  }
+};
 async function handleWorkerMessage(msg) {
   try {
     let result;
     switch (msg.type) {
       case "parseFrame": {
         const { wireBytes, knownTotalQrCount, knownFirstFrameCrc } = msg.payload;
-        result = DataApi.parseFrame(new Uint8Array(wireBytes), knownTotalQrCount, knownFirstFrameCrc);
+        result = DataApi.parseFrame(wireBytes instanceof Uint8Array ? wireBytes : new Uint8Array(wireBytes), knownTotalQrCount, knownFirstFrameCrc);
         break;
       }
       case "decodeFrames": {
-        const frames = msg.payload.wireFrames.map((f) => new Uint8Array(f));
+        const frames = msg.payload.wireFrames.map((frame) => {
+          if (frame instanceof Uint8Array) return frame;
+          return new Uint8Array(frame);
+        });
         result = DataApi.decodeFrames(frames);
         break;
       }
       case "encodeBytes": {
         const { data, maxFrameBits } = msg.payload;
-        result = DataApi.encodeBytes(new Uint8Array(data), maxFrameBits);
+        result = DataApi.encodeBytes(data instanceof Uint8Array ? data : new Uint8Array(data), maxFrameBits);
         break;
       }
       case "encodeText": {
@@ -11183,9 +11483,7 @@ async function handleWorkerMessage(msg) {
       }
       case "decodeQrImage": {
         const { rgbaPixels, width, height } = msg.payload;
-        const pixels = new Uint8Array(rgbaPixels);
-        const wireBytes = DataApi.decodeQrImage(pixels, width, height);
-        result = Array.from(wireBytes);
+        result = DataApi.decodeQrImage(rgbaPixels instanceof Uint8Array ? rgbaPixels : new Uint8Array(rgbaPixels), width, height);
         break;
       }
       default:
@@ -11197,85 +11495,38 @@ async function handleWorkerMessage(msg) {
       success: true,
       result
     };
-  } catch (err) {
+  } catch (error2) {
     return {
       id: msg.id,
       type: msg.type,
       success: false,
-      error: err instanceof Error ? err.message : String(err)
+      error: error2 instanceof Error ? error2.message : String(error2)
     };
   }
 }
-function setupWorkerSelfListener() {
-  if (!isWorkerContext()) {
+var workerListenerSetup = false;
+async function setupWorkerSelfListener() {
+  if (workerListenerSetup) return;
+  if (typeof self !== "undefined" && typeof window === "undefined") {
+    workerListenerSetup = true;
+    self.addEventListener("message", async (event) => {
+      const response = await handleWorkerMessage(event.data);
+      self.postMessage(response);
+    });
     return;
   }
-  const g = globalThis;
-  if (g.process && g.process.versions && g.process.versions.node) {
-    try {
-      const req = globalThis.require;
-      if (typeof req === "function") {
-        const workerThreads = req("node:worker_threads");
-        if (workerThreads.parentPort) {
-          workerThreads.parentPort.on("message", async (msg) => {
-            const res = await handleWorkerMessage(msg);
-            workerThreads.parentPort.postMessage(res);
-          });
-          return;
-        }
-      }
-    } catch {
-    }
-  }
-  if (typeof self !== "undefined") {
-    self.addEventListener("message", async (event) => {
-      const res = await handleWorkerMessage(event.data);
-      self.postMessage(res);
+  if (isNodeEnvironment()) {
+    const specifier = "node:worker_threads";
+    const nodeModule = await import(specifier);
+    if (nodeModule.isMainThread || !nodeModule.parentPort) return;
+    workerListenerSetup = true;
+    nodeModule.parentPort.on("message", async (message) => {
+      const response = await handleWorkerMessage(message);
+      nodeModule.parentPort?.postMessage(response);
     });
   }
 }
-function decodeQrImageInWorker(worker, rgbaPixels, width, height) {
-  return new Promise((resolve, reject) => {
-    const id2 = `qr-decode-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    const listener = (data) => {
-      if (data && data.id === id2) {
-        cleanup();
-        if (data.success) {
-          resolve(new Uint8Array(data.result));
-        } else {
-          reject(new Error(data.error || "Worker decodeQrImage failed"));
-        }
-      }
-    };
-    const handleEvent = (event) => {
-      const data = event && typeof event === "object" && "data" in event ? event.data : event;
-      listener(data);
-    };
-    const cleanup = () => {
-      if ("removeEventListener" in worker && typeof worker.removeEventListener === "function") {
-        worker.removeEventListener("message", handleEvent);
-      } else if ("off" in worker && typeof worker.off === "function") {
-        worker.off("message", handleEvent);
-      }
-    };
-    if ("addEventListener" in worker && typeof worker.addEventListener === "function") {
-      worker.addEventListener("message", handleEvent);
-    } else if ("on" in worker && typeof worker.on === "function") {
-      worker.on("message", handleEvent);
-    }
-    const message = {
-      id: id2,
-      type: "decodeQrImage",
-      payload: {
-        rgbaPixels: Array.from(rgbaPixels),
-        width,
-        height
-      }
-    };
-    worker.postMessage(message);
-  });
-}
-setupWorkerSelfListener();
+void setupWorkerSelfListener();
 export {
   AppConfig,
   BrowserRuntimeApi,
@@ -11284,9 +11535,8 @@ export {
   DataConfig,
   TransportApi,
   TransportConfig,
-  decodeQrImageInWorker,
+  WorkerClient,
   handleWorkerMessage,
-  isWorkerContext,
   protocol,
   setupWorkerSelfListener
 };

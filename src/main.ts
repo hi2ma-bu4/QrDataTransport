@@ -5,4 +5,4 @@ export { DataApi, type DecodedResult } from "./api/dataApi";
 export { TransportApi, type ErrorCode, type ReceiveOptions, type SendOptions, type TransportError, type TransportState, type TransportWarning, type WarningCode } from "./api/transportApi";
 
 export { AppConfig, BrowserRuntimeConfig, DataConfig, TransportConfig } from "./config/index";
-export { decodeQrImageInWorker, handleWorkerMessage, isWorkerContext, setupWorkerSelfListener } from "./utils/worker";
+export { handleWorkerMessage, setupWorkerSelfListener, WorkerClient, type WorkerClientOptions } from "./utils/worker";
