@@ -157,3 +157,56 @@ test("WorkerClient request error handling in TransportApi", async () => {
 	assert.ok(errorOccurred);
 	transport.stopReceive();
 });
+
+test("TransportApi.processImageFrame decodes image via worker when enabled", async () => {
+	const transport = new TransportApi(
+		new AppConfig({
+			transport: {
+				useWorker: true,
+				createWorker: createMockWorker,
+			},
+		}),
+	);
+
+	let frameProcessedCalled = false;
+	transport.onFrameProcessed((evt) => {
+		if (evt.validCount === 0 && !evt.isQrDetected) {
+			frameProcessedCalled = true;
+		}
+	});
+
+	await transport.startReceive();
+
+	// Pass dummy invalid RGBA pixels (10x10 = 400 bytes needed, but pass empty/invalid)
+	const dummyPixels = new Uint8Array(100);
+	await transport.processImageFrame(dummyPixels, 10, 10);
+
+	assert.ok(frameProcessedCalled);
+	assert.equal(transport.getState(), "WaitingForFirst");
+	transport.stopReceive();
+});
+
+test("TransportApi.processImageFrame decodes image synchronously when worker is disabled", async () => {
+	const transport = new TransportApi(
+		new AppConfig({
+			transport: {
+				useWorker: false,
+			},
+		}),
+	);
+
+	let frameProcessedCount = 0;
+	transport.onFrameProcessed(() => {
+		frameProcessedCount++;
+	});
+
+	await transport.startReceive();
+
+	// Invalid pixel buffer size for 10x10 -> DataApi.decodeQrImage throws, caught, processFrame(null) called
+	const dummyPixels = new Uint8Array(10);
+	await transport.processImageFrame(dummyPixels, 10, 10);
+
+	assert.ok(frameProcessedCount > 0);
+	assert.equal(transport.getState(), "WaitingForFirst");
+	transport.stopReceive();
+});

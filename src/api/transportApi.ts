@@ -387,6 +387,44 @@ export class TransportApi {
 	}
 
 	/**
+	 * Decode a QR image to wire bytes. Uses Worker when configured or falls back to DataApi.
+	 */
+	private decodeQrImageInternal(rgbaPixels: Uint8Array, width: number, height: number): Promise<Uint8Array> | Uint8Array {
+		if (this.shouldUseWorker()) {
+			const worker = this.getOrCreateWorkerClient();
+			return worker.decodeQrImage(rgbaPixels, width, height);
+		}
+		return DataApi.decodeQrImage(rgbaPixels, width, height);
+	}
+
+	/**
+	 * Process an incoming QR image frame (RGBA pixel buffer).
+	 */
+	public async processImageFrame(rgbaPixels: Uint8Array, width: number, height: number): Promise<void> {
+		if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
+			this.lastQrDetected = false;
+			return;
+		}
+
+		if (!rgbaPixels || rgbaPixels.length === 0 || width <= 0 || height <= 0) {
+			this.lastQrDetected = false;
+			this.emitFrameProcessed();
+			return;
+		}
+
+		try {
+			const decodedWire = await this.decodeQrImageInternal(rgbaPixels, width, height);
+			if (decodedWire && decodedWire.length > 0) {
+				await this.processFrame(decodedWire);
+			} else {
+				await this.processFrame(null);
+			}
+		} catch {
+			await this.processFrame(null);
+		}
+	}
+
+	/**
 	 * Process an incoming raw wire frame array.
 	 */
 	private parseFrameInternal(wireBytes: Uint8Array): Promise<FrameMetadata> | FrameMetadata {
@@ -432,7 +470,7 @@ export class TransportApi {
 			}
 		}
 
-		const handleParsedMetadata = (metadata: FrameMetadata) => {
+		const handleParsedMetadata = (metadata: FrameMetadata): void | Promise<void> => {
 			// Spec v8 Section 41: Out-of-range frame number -> ignore
 			if (this.knownTotalQrCount !== undefined && metadata.frameNumber >= this.knownTotalQrCount) {
 				return;
@@ -460,8 +498,7 @@ export class TransportApi {
 			if (this.state === "WaitingForFirst") {
 				if (metadata.isFirst) {
 					if (metadata.crcValid) {
-						this.establishFirstQr(wireBytes, metadata);
-						this.processPendingQueue();
+						return this.establishFirstQr(wireBytes, metadata);
 					} else {
 						// Corrupted First QR -> count CRC error
 						this.handleCrcError();
@@ -470,7 +507,7 @@ export class TransportApi {
 				return;
 			}
 
-			this.processPostFirstFrame(wireBytes, metadata);
+			return this.processPostFirstFrame(wireBytes, metadata);
 		};
 
 		let isAsync = false;
@@ -479,7 +516,7 @@ export class TransportApi {
 			if (parsed instanceof Promise) {
 				isAsync = true;
 				return parsed
-					.then(handleParsedMetadata)
+					.then((metadata) => handleParsedMetadata(metadata))
 					.catch((err) => {
 						this.emitError({
 							code: "SYNTAX_ERROR",
@@ -491,7 +528,21 @@ export class TransportApi {
 						this.emitFrameProcessed();
 					});
 			} else {
-				handleParsedMetadata(parsed);
+				const res = handleParsedMetadata(parsed);
+				if (res instanceof Promise) {
+					isAsync = true;
+					return res
+						.catch((err) => {
+							this.emitError({
+								code: "SYNTAX_ERROR",
+								message: `Syntax error during frame parsing: ${String(err)}`,
+								critical: false,
+							});
+						})
+						.finally(() => {
+							this.emitFrameProcessed();
+						});
+				}
 			}
 		} catch (err) {
 			this.emitError({
@@ -506,7 +557,7 @@ export class TransportApi {
 		}
 	}
 
-	private establishFirstQr(wireBytes: Uint8Array, metadata: FrameMetadata): void {
+	private establishFirstQr(wireBytes: Uint8Array, metadata: FrameMetadata): void | Promise<void> {
 		this.knownTotalQrCount = metadata.totalQrCount;
 		this.knownFirstFrameCrc = metadata.frameCrc;
 		this.storedFrames.set(0, wireBytes);
@@ -515,22 +566,41 @@ export class TransportApi {
 
 		if (metadata.totalQrCount === 1) {
 			this.checkCompletion();
+		} else {
+			return this.processPendingQueue();
 		}
 	}
 
-	private removeSupersededPendingFrames(frameNumber: number): void {
+	private removeSupersededPendingFrames(frameNumber: number): void | Promise<void> {
 		if (this.pendingPreFirstFrames.length === 0) return;
-		this.pendingPreFirstFrames = this.pendingPreFirstFrames.filter((wire) => {
-			try {
-				const meta = DataApi.parseFrame(wire, this.knownTotalQrCount, this.knownFirstFrameCrc);
-				return meta.frameNumber !== frameNumber;
-			} catch {
-				return false;
-			}
-		});
+		if (this.shouldUseWorker()) {
+			return (async () => {
+				const nextPending: Uint8Array[] = [];
+				for (const wire of this.pendingPreFirstFrames) {
+					try {
+						const meta = await this.parseFrameInternal(wire);
+						if (meta.frameNumber !== frameNumber) {
+							nextPending.push(wire);
+						}
+					} catch {
+						// ignore invalid pending frame
+					}
+				}
+				this.pendingPreFirstFrames = nextPending;
+			})();
+		} else {
+			this.pendingPreFirstFrames = this.pendingPreFirstFrames.filter((wire) => {
+				try {
+					const meta = this.parseFrameInternal(wire) as FrameMetadata;
+					return meta.frameNumber !== frameNumber;
+				} catch {
+					return false;
+				}
+			});
+		}
 	}
 
-	private processPostFirstFrame(wireBytes: Uint8Array, metadata: FrameMetadata): void {
+	private processPostFirstFrame(wireBytes: Uint8Array, metadata: FrameMetadata): void | Promise<void> {
 		if (!metadata.crcValid) {
 			this.handleCrcError();
 			return;
@@ -539,64 +609,80 @@ export class TransportApi {
 		// CRC is VALID! Reset consecutive error count
 		this.consecutiveCrcErrors = 0;
 
-		// Spec v8 Section 35: Remove superseded pre-first queued items for this frame number
-		this.removeSupersededPendingFrames(metadata.frameNumber);
+		const continueProcessing = (): void | Promise<void> => {
+			const existingWire = this.storedFrames.get(metadata.frameNumber);
+			if (existingWire) {
+				const checkExistingAndProceed = (existingMeta?: FrameMetadata): void => {
+					// Spec v8 Section 38, 39, 60: If First QR (Frame 0) arrives with a different First CRC, update communication reference and discard subsequent frames!
+					if (metadata.frameNumber === 0 && metadata.frameCrc !== this.knownFirstFrameCrc) {
+						for (const key of Array.from(this.storedFrames.keys())) {
+							if (key !== 0) {
+								this.storedFrames.delete(key);
+							}
+						}
+						this.knownFirstFrameCrc = metadata.frameCrc;
+						this.knownTotalQrCount = metadata.totalQrCount;
+						this.storedFrames.set(0, wireBytes);
 
-		const existingWire = this.storedFrames.get(metadata.frameNumber);
-		if (existingWire) {
-			let existingMeta: FrameMetadata | undefined;
-			try {
-				existingMeta = DataApi.parseFrame(existingWire, this.knownTotalQrCount, this.knownFirstFrameCrc);
-			} catch {
-				// ignore
-			}
-
-			// Spec v8 Section 38, 39, 60: If First QR (Frame 0) arrives with a different First CRC, update communication reference and discard subsequent frames!
-			if (metadata.frameNumber === 0 && metadata.frameCrc !== this.knownFirstFrameCrc) {
-				for (const key of Array.from(this.storedFrames.keys())) {
-					if (key !== 0) {
-						this.storedFrames.delete(key);
+						this.emitWarning({
+							code: "POST_FIRST_FRAMES_DISCARDED",
+							message: "First Frame CRC changed. Discarded subsequent stored frames.",
+						});
+						this.checkCompletion();
+						return;
 					}
+
+					if (existingMeta && existingMeta.payloadBitLen === metadata.payloadBitLen) {
+						// Frame Number and Payload Length match existing -> Skip!
+						return;
+					}
+
+					this.storedFrames.set(metadata.frameNumber, wireBytes);
+					this.emitWarning({
+						code: "FRAME_CHANGED",
+						message: `Frame ${metadata.frameNumber} payload length changed`,
+					});
+					this.emitWarning({
+						code: "FRAME_REPLACED",
+						message: `Frame ${metadata.frameNumber} replaced with updated payload`,
+					});
+					this.checkCompletion();
+				};
+
+				let parsedExisting: Promise<FrameMetadata> | FrameMetadata;
+				try {
+					parsedExisting = this.parseFrameInternal(existingWire);
+				} catch {
+					checkExistingAndProceed(undefined);
+					return;
 				}
-				this.knownFirstFrameCrc = metadata.frameCrc;
-				this.knownTotalQrCount = metadata.totalQrCount;
-				this.storedFrames.set(0, wireBytes);
 
-				this.emitWarning({
-					code: "POST_FIRST_FRAMES_DISCARDED",
-					message: "First Frame CRC changed. Discarded subsequent stored frames.",
-				});
-				this.checkCompletion();
-				return;
+				if (parsedExisting instanceof Promise) {
+					return parsedExisting.then((meta) => checkExistingAndProceed(meta)).catch(() => checkExistingAndProceed(undefined));
+				} else {
+					checkExistingAndProceed(parsedExisting);
+					return;
+				}
 			}
 
-			if (existingMeta && existingMeta.payloadBitLen === metadata.payloadBitLen) {
-				// Frame Number and Payload Length match existing -> Skip!
-				return;
-			}
-
+			// New Frame arrival (CRC valid)
 			this.storedFrames.set(metadata.frameNumber, wireBytes);
-			this.emitWarning({
-				code: "FRAME_CHANGED",
-				message: `Frame ${metadata.frameNumber} payload length changed`,
-			});
-			this.emitWarning({
-				code: "FRAME_REPLACED",
-				message: `Frame ${metadata.frameNumber} replaced with updated payload`,
-			});
+			this.totalReceivedWireBits += wireBytes.length * 8;
+
+			if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
+				this.state = "Receiving";
+			}
+
 			this.checkCompletion();
-			return;
+		};
+
+		// Spec v8 Section 35: Remove superseded pre-first queued items for this frame number
+		const res = this.removeSupersededPendingFrames(metadata.frameNumber);
+		if (res instanceof Promise) {
+			return res.then(continueProcessing);
+		} else {
+			return continueProcessing();
 		}
-
-		// New Frame arrival (CRC valid)
-		this.storedFrames.set(metadata.frameNumber, wireBytes);
-		this.totalReceivedWireBits += wireBytes.length * 8;
-
-		if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
-			this.state = "Receiving";
-		}
-
-		this.checkCompletion();
 	}
 
 	private handleCrcError(): void {
@@ -618,20 +704,36 @@ export class TransportApi {
 		}
 	}
 
-	private processPendingQueue(): void {
+	private processPendingQueue(): void | Promise<void> {
 		if (this.pendingPreFirstFrames.length === 0) return;
 		const queue = [...this.pendingPreFirstFrames];
 		this.pendingPreFirstFrames = [];
 
-		for (const wireBytes of queue) {
-			try {
-				const metadata = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
-				if (this.storedFrames.has(metadata.frameNumber)) {
-					continue;
+		if (this.shouldUseWorker()) {
+			return (async () => {
+				for (const wireBytes of queue) {
+					try {
+						const metadata = await this.parseFrameInternal(wireBytes);
+						if (this.storedFrames.has(metadata.frameNumber)) {
+							continue;
+						}
+						await this.processPostFirstFrame(wireBytes, metadata);
+					} catch {
+						// ignore invalid pending frame
+					}
 				}
-				this.processPostFirstFrame(wireBytes, metadata);
-			} catch {
-				// ignore invalid pending frame
+			})();
+		} else {
+			for (const wireBytes of queue) {
+				try {
+					const metadata = this.parseFrameInternal(wireBytes) as FrameMetadata;
+					if (this.storedFrames.has(metadata.frameNumber)) {
+						continue;
+					}
+					this.processPostFirstFrame(wireBytes, metadata);
+				} catch {
+					// ignore invalid pending frame
+				}
 			}
 		}
 	}

@@ -80,10 +80,7 @@ const INITIAL_SCRIPT_INFO = (() => {
 	const current = document.currentScript;
 
 	if (current instanceof HTMLScriptElement && current.src) {
-		return {
-			url: current.src,
-			type: current.type === "module" ? ("module" as const) : ("classic" as const),
-		};
+		return current.src;
 	}
 
 	return undefined;
@@ -102,21 +99,27 @@ function toError(error: unknown): Error {
 }
 
 function resolveBrowserWorkerInfo(options: WorkerClientOptions): { url: string | URL; type: "module" | "classic" } {
-	let url = options.workerUrl ?? INITIAL_SCRIPT_INFO?.url;
-	let detectedType = INITIAL_SCRIPT_INFO?.type;
+	let url = options.workerUrl ?? INITIAL_SCRIPT_INFO;
+
+	if (!url && typeof import.meta !== "undefined" && import.meta.url) {
+		url = import.meta.url;
+	}
+
+	if (!url && typeof document !== "undefined" && document.currentScript instanceof HTMLScriptElement && document.currentScript.src) {
+		url = document.currentScript.src;
+	}
 
 	if (!url && typeof document !== "undefined") {
 		const scripts = document.scripts;
 		const fileName = options.libraryFileName ?? "QrDataTransport";
 		const escapedName = fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const pattern = new RegExp(`(?:^|/)${escapedName}(?:\\.min)?\\.(?:js|mjs)(?:[?#].*)?$`, "i");
+		const pattern = new RegExp(`(?:^|/)${escapedName}(?:\\.min)?\\.m?js(?:[?#].*)?$`, "i");
 
 		for (let i = scripts.length - 1; i >= 0; i--) {
 			const script = scripts[i];
 			if (!script.src || !pattern.test(script.src)) continue;
 
 			url = script.src;
-			detectedType = script.type === "module" || /\.mjs(?:[?#]|$)/i.test(script.src) ? "module" : "classic";
 			break;
 		}
 	}
@@ -126,7 +129,7 @@ function resolveBrowserWorkerInfo(options: WorkerClientOptions): { url: string |
 	}
 
 	const requestedType = options.workerType ?? "auto";
-	const type = requestedType === "auto" ? (detectedType ?? "module") : requestedType;
+	const type = requestedType === "auto" ? "module" : requestedType;
 
 	return { url, type };
 }
@@ -329,6 +332,7 @@ export class WorkerClient {
 	private failWorker(error: Error): void {
 		if (this.failed || this.disposed) return;
 
+		console.error("[WorkerClient] Worker failed:", error);
 		this.failed = true;
 
 		const worker = this.worker;
@@ -350,9 +354,6 @@ export class WorkerClient {
 			if (task.settled) continue;
 			this.settleFallback(id, task);
 		}
-
-		// error は障害発生の記録用。fallback 有効時は各タスクを再実行する。
-		void error;
 	}
 
 	async request(type: WorkerRequestType, payload: any, transfer: Transferable[] = [], fallbackPayload: any = payload): Promise<any> {

@@ -373,16 +373,7 @@ btnStartReceive.addEventListener("click", async () => {
 
 		await runtime.startCamera(
 			(rgbaPixels, width, height) => {
-				try {
-					const wireBytes = DataApi.decodeQrImage(rgbaPixels, width, height);
-					if (wireBytes && wireBytes.length > 0) {
-						transport.processFrame(wireBytes);
-					} else {
-						transport.processFrame(null);
-					}
-				} catch {
-					transport.processFrame(null);
-				}
+				transport.processImageFrame(rgbaPixels, width, height);
 			},
 			{
 				previewCanvas: "camera-canvas",

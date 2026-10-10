@@ -447,6 +447,14 @@ declare class TransportApi {
     private resetReceiverState;
     getPendingPreFirstQueueLength(): number;
     /**
+     * Decode a QR image to wire bytes. Uses Worker when configured or falls back to DataApi.
+     */
+    private decodeQrImageInternal;
+    /**
+     * Process an incoming QR image frame (RGBA pixel buffer).
+     */
+    processImageFrame(rgbaPixels: Uint8Array, width: number, height: number): Promise<void>;
+    /**
      * Process an incoming raw wire frame array.
      */
     private parseFrameInternal;

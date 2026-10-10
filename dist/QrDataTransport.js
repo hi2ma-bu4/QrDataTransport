@@ -10700,10 +10700,7 @@ var INITIAL_SCRIPT_INFO = (() => {
   }
   const current = document.currentScript;
   if (current instanceof HTMLScriptElement && current.src) {
-    return {
-      url: current.src,
-      type: current.type === "module" ? "module" : "classic"
-    };
+    return current.src;
   }
   return void 0;
 })();
@@ -10715,18 +10712,22 @@ function toError(error2) {
   return error2 instanceof Error ? error2 : new Error(String(error2));
 }
 function resolveBrowserWorkerInfo(options) {
-  let url = options.workerUrl ?? INITIAL_SCRIPT_INFO?.url;
-  let detectedType = INITIAL_SCRIPT_INFO?.type;
+  let url = options.workerUrl ?? INITIAL_SCRIPT_INFO;
+  if (!url && typeof import.meta !== "undefined" && import.meta.url) {
+    url = import.meta.url;
+  }
+  if (!url && typeof document !== "undefined" && document.currentScript instanceof HTMLScriptElement && document.currentScript.src) {
+    url = document.currentScript.src;
+  }
   if (!url && typeof document !== "undefined") {
     const scripts = document.scripts;
     const fileName = options.libraryFileName ?? "QrDataTransport";
     const escapedName = fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`(?:^|/)${escapedName}(?:\\.min)?\\.(?:js|mjs)(?:[?#].*)?$`, "i");
+    const pattern = new RegExp(`(?:^|/)${escapedName}(?:\\.min)?\\.m?js(?:[?#].*)?$`, "i");
     for (let i = scripts.length - 1; i >= 0; i--) {
       const script = scripts[i];
       if (!script.src || !pattern.test(script.src)) continue;
       url = script.src;
-      detectedType = script.type === "module" || /\.mjs(?:[?#]|$)/i.test(script.src) ? "module" : "classic";
       break;
     }
   }
@@ -10734,7 +10735,7 @@ function resolveBrowserWorkerInfo(options) {
     throw new Error("Worker URL \u3092\u89E3\u6C7A\u3067\u304D\u307E\u305B\u3093\u3002workerUrl \u307E\u305F\u306F createWorker \u3092\u6307\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
   }
   const requestedType = options.workerType ?? "auto";
-  const type = requestedType === "auto" ? detectedType ?? "module" : requestedType;
+  const type = requestedType === "auto" ? "module" : requestedType;
   return { url, type };
 }
 async function createDefaultWorker(options) {
@@ -10887,6 +10888,7 @@ var WorkerClient = class {
   }
   failWorker(error2) {
     if (this.failed || this.disposed) return;
+    console.error("[WorkerClient] Worker failed:", error2);
     this.failed = true;
     const worker = this.worker;
     this.worker = null;
@@ -10902,7 +10904,6 @@ var WorkerClient = class {
       if (task.settled) continue;
       this.settleFallback(id2, task);
     }
-    void error2;
   }
   async request(type, payload, transfer = [], fallbackPayload = payload) {
     if (this.disposed) {
@@ -11382,6 +11383,40 @@ var TransportApi = class {
     return this.pendingPreFirstFrames.length;
   }
   /**
+   * Decode a QR image to wire bytes. Uses Worker when configured or falls back to DataApi.
+   */
+  decodeQrImageInternal(rgbaPixels, width, height) {
+    if (this.shouldUseWorker()) {
+      const worker = this.getOrCreateWorkerClient();
+      return worker.decodeQrImage(rgbaPixels, width, height);
+    }
+    return DataApi.decodeQrImage(rgbaPixels, width, height);
+  }
+  /**
+   * Process an incoming QR image frame (RGBA pixel buffer).
+   */
+  async processImageFrame(rgbaPixels, width, height) {
+    if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
+      this.lastQrDetected = false;
+      return;
+    }
+    if (!rgbaPixels || rgbaPixels.length === 0 || width <= 0 || height <= 0) {
+      this.lastQrDetected = false;
+      this.emitFrameProcessed();
+      return;
+    }
+    try {
+      const decodedWire = await this.decodeQrImageInternal(rgbaPixels, width, height);
+      if (decodedWire && decodedWire.length > 0) {
+        await this.processFrame(decodedWire);
+      } else {
+        await this.processFrame(null);
+      }
+    } catch {
+      await this.processFrame(null);
+    }
+  }
+  /**
    * Process an incoming raw wire frame array.
    */
   parseFrameInternal(wireBytes) {
@@ -11443,22 +11478,21 @@ var TransportApi = class {
       if (this.state === "WaitingForFirst") {
         if (metadata2.isFirst) {
           if (metadata2.crcValid) {
-            this.establishFirstQr(wireBytes, metadata2);
-            this.processPendingQueue();
+            return this.establishFirstQr(wireBytes, metadata2);
           } else {
             this.handleCrcError();
           }
         }
         return;
       }
-      this.processPostFirstFrame(wireBytes, metadata2);
+      return this.processPostFirstFrame(wireBytes, metadata2);
     };
     let isAsync = false;
     try {
       const parsed = this.parseFrameInternal(wireBytes);
       if (parsed instanceof Promise) {
         isAsync = true;
-        return parsed.then(handleParsedMetadata).catch((err) => {
+        return parsed.then((metadata2) => handleParsedMetadata(metadata2)).catch((err) => {
           this.emitError({
             code: "SYNTAX_ERROR",
             message: `Syntax error during frame parsing: ${String(err)}`,
@@ -11468,7 +11502,19 @@ var TransportApi = class {
           this.emitFrameProcessed();
         });
       } else {
-        handleParsedMetadata(parsed);
+        const res = handleParsedMetadata(parsed);
+        if (res instanceof Promise) {
+          isAsync = true;
+          return res.catch((err) => {
+            this.emitError({
+              code: "SYNTAX_ERROR",
+              message: `Syntax error during frame parsing: ${String(err)}`,
+              critical: false
+            });
+          }).finally(() => {
+            this.emitFrameProcessed();
+          });
+        }
       }
     } catch (err) {
       this.emitError({
@@ -11490,18 +11536,36 @@ var TransportApi = class {
     this.state = metadata2.totalQrCount === 1 ? "OverallCrcVerification" : "FirstEstablished";
     if (metadata2.totalQrCount === 1) {
       this.checkCompletion();
+    } else {
+      return this.processPendingQueue();
     }
   }
   removeSupersededPendingFrames(frameNumber) {
     if (this.pendingPreFirstFrames.length === 0) return;
-    this.pendingPreFirstFrames = this.pendingPreFirstFrames.filter((wire) => {
-      try {
-        const meta = DataApi.parseFrame(wire, this.knownTotalQrCount, this.knownFirstFrameCrc);
-        return meta.frameNumber !== frameNumber;
-      } catch {
-        return false;
-      }
-    });
+    if (this.shouldUseWorker()) {
+      return (async () => {
+        const nextPending = [];
+        for (const wire of this.pendingPreFirstFrames) {
+          try {
+            const meta = await this.parseFrameInternal(wire);
+            if (meta.frameNumber !== frameNumber) {
+              nextPending.push(wire);
+            }
+          } catch {
+          }
+        }
+        this.pendingPreFirstFrames = nextPending;
+      })();
+    } else {
+      this.pendingPreFirstFrames = this.pendingPreFirstFrames.filter((wire) => {
+        try {
+          const meta = this.parseFrameInternal(wire);
+          return meta.frameNumber !== frameNumber;
+        } catch {
+          return false;
+        }
+      });
+    }
   }
   processPostFirstFrame(wireBytes, metadata2) {
     if (!metadata2.crcValid) {
@@ -11509,51 +11573,67 @@ var TransportApi = class {
       return;
     }
     this.consecutiveCrcErrors = 0;
-    this.removeSupersededPendingFrames(metadata2.frameNumber);
-    const existingWire = this.storedFrames.get(metadata2.frameNumber);
-    if (existingWire) {
-      let existingMeta;
-      try {
-        existingMeta = DataApi.parseFrame(existingWire, this.knownTotalQrCount, this.knownFirstFrameCrc);
-      } catch {
-      }
-      if (metadata2.frameNumber === 0 && metadata2.frameCrc !== this.knownFirstFrameCrc) {
-        for (const key of Array.from(this.storedFrames.keys())) {
-          if (key !== 0) {
-            this.storedFrames.delete(key);
+    const continueProcessing = () => {
+      const existingWire = this.storedFrames.get(metadata2.frameNumber);
+      if (existingWire) {
+        const checkExistingAndProceed = (existingMeta) => {
+          if (metadata2.frameNumber === 0 && metadata2.frameCrc !== this.knownFirstFrameCrc) {
+            for (const key of Array.from(this.storedFrames.keys())) {
+              if (key !== 0) {
+                this.storedFrames.delete(key);
+              }
+            }
+            this.knownFirstFrameCrc = metadata2.frameCrc;
+            this.knownTotalQrCount = metadata2.totalQrCount;
+            this.storedFrames.set(0, wireBytes);
+            this.emitWarning({
+              code: "POST_FIRST_FRAMES_DISCARDED",
+              message: "First Frame CRC changed. Discarded subsequent stored frames."
+            });
+            this.checkCompletion();
+            return;
           }
+          if (existingMeta && existingMeta.payloadBitLen === metadata2.payloadBitLen) {
+            return;
+          }
+          this.storedFrames.set(metadata2.frameNumber, wireBytes);
+          this.emitWarning({
+            code: "FRAME_CHANGED",
+            message: `Frame ${metadata2.frameNumber} payload length changed`
+          });
+          this.emitWarning({
+            code: "FRAME_REPLACED",
+            message: `Frame ${metadata2.frameNumber} replaced with updated payload`
+          });
+          this.checkCompletion();
+        };
+        let parsedExisting;
+        try {
+          parsedExisting = this.parseFrameInternal(existingWire);
+        } catch {
+          checkExistingAndProceed(void 0);
+          return;
         }
-        this.knownFirstFrameCrc = metadata2.frameCrc;
-        this.knownTotalQrCount = metadata2.totalQrCount;
-        this.storedFrames.set(0, wireBytes);
-        this.emitWarning({
-          code: "POST_FIRST_FRAMES_DISCARDED",
-          message: "First Frame CRC changed. Discarded subsequent stored frames."
-        });
-        this.checkCompletion();
-        return;
-      }
-      if (existingMeta && existingMeta.payloadBitLen === metadata2.payloadBitLen) {
-        return;
+        if (parsedExisting instanceof Promise) {
+          return parsedExisting.then((meta) => checkExistingAndProceed(meta)).catch(() => checkExistingAndProceed(void 0));
+        } else {
+          checkExistingAndProceed(parsedExisting);
+          return;
+        }
       }
       this.storedFrames.set(metadata2.frameNumber, wireBytes);
-      this.emitWarning({
-        code: "FRAME_CHANGED",
-        message: `Frame ${metadata2.frameNumber} payload length changed`
-      });
-      this.emitWarning({
-        code: "FRAME_REPLACED",
-        message: `Frame ${metadata2.frameNumber} replaced with updated payload`
-      });
+      this.totalReceivedWireBits += wireBytes.length * 8;
+      if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
+        this.state = "Receiving";
+      }
       this.checkCompletion();
-      return;
+    };
+    const res = this.removeSupersededPendingFrames(metadata2.frameNumber);
+    if (res instanceof Promise) {
+      return res.then(continueProcessing);
+    } else {
+      return continueProcessing();
     }
-    this.storedFrames.set(metadata2.frameNumber, wireBytes);
-    this.totalReceivedWireBits += wireBytes.length * 8;
-    if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
-      this.state = "Receiving";
-    }
-    this.checkCompletion();
   }
   handleCrcError() {
     this.consecutiveCrcErrors += 1;
@@ -11575,14 +11655,29 @@ var TransportApi = class {
     if (this.pendingPreFirstFrames.length === 0) return;
     const queue = [...this.pendingPreFirstFrames];
     this.pendingPreFirstFrames = [];
-    for (const wireBytes of queue) {
-      try {
-        const metadata2 = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
-        if (this.storedFrames.has(metadata2.frameNumber)) {
-          continue;
+    if (this.shouldUseWorker()) {
+      return (async () => {
+        for (const wireBytes of queue) {
+          try {
+            const metadata2 = await this.parseFrameInternal(wireBytes);
+            if (this.storedFrames.has(metadata2.frameNumber)) {
+              continue;
+            }
+            await this.processPostFirstFrame(wireBytes, metadata2);
+          } catch {
+          }
         }
-        this.processPostFirstFrame(wireBytes, metadata2);
-      } catch {
+      })();
+    } else {
+      for (const wireBytes of queue) {
+        try {
+          const metadata2 = this.parseFrameInternal(wireBytes);
+          if (this.storedFrames.has(metadata2.frameNumber)) {
+            continue;
+          }
+          this.processPostFirstFrame(wireBytes, metadata2);
+        } catch {
+        }
       }
     }
   }
