@@ -514,15 +514,20 @@ export async function handleWorkerMessage(msg: WorkerRequestMessage): Promise<Wo
 			}
 
 			case "encodeBytes": {
-				const { data, maxFrameBits } = msg.payload;
+				const { data, maxFrameBits, qrVersion, ecLevel, parityMode } = msg.payload;
 
-				result = DataApi.encodeBytes(data instanceof Uint8Array ? data : new Uint8Array(data), maxFrameBits);
+				result = DataApi.encodeBytes(
+					data instanceof Uint8Array ? data : new Uint8Array(data),
+					qrVersion ?? maxFrameBits,
+					ecLevel,
+					parityMode
+				);
 				break;
 			}
 
 			case "encodeText": {
-				const { text, maxFrameBits } = msg.payload;
-				result = DataApi.encodeText(text, maxFrameBits);
+				const { text, maxFrameBits, qrVersion, ecLevel, parityMode } = msg.payload;
+				result = DataApi.encodeText(text, qrVersion ?? maxFrameBits, ecLevel, parityMode);
 				break;
 			}
 

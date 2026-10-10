@@ -10556,6 +10556,11 @@ var TransportConfig = class _TransportConfig {
    * Default: 100ms.
    */
   intervalMs;
+  /** Worker configuration options */
+  workerUrl;
+  createWorker;
+  workerType;
+  timeout;
   constructor(options) {
     const crcMax = options?.maxConsecutiveCrcErrors ?? 16;
     if (crcMax < 0) {
@@ -10569,13 +10574,21 @@ var TransportConfig = class _TransportConfig {
     this.maxPendingFramesBeforeFirst = pendingMax;
     this.useWorker = options?.useWorker ?? true;
     this.intervalMs = options?.intervalMs ?? 100;
+    this.workerUrl = options?.workerUrl;
+    this.createWorker = options?.createWorker;
+    this.workerType = options?.workerType;
+    this.timeout = options?.timeout;
   }
   clone() {
     return new _TransportConfig({
       maxConsecutiveCrcErrors: this.maxConsecutiveCrcErrors,
       maxPendingFramesBeforeFirst: this.maxPendingFramesBeforeFirst,
       useWorker: this.useWorker,
-      intervalMs: this.intervalMs
+      intervalMs: this.intervalMs,
+      workerUrl: this.workerUrl,
+      createWorker: this.createWorker,
+      workerType: this.workerType,
+      timeout: this.timeout
     });
   }
 };
@@ -10676,465 +10689,6 @@ var AppConfig = class _AppConfig {
       data: this.data.clone(),
       browserRuntime: this.browserRuntime.clone()
     });
-  }
-};
-
-// src/api/transportApi.ts
-var TransportApi = class {
-  state = "Idle";
-  config;
-  runtime;
-  // Callbacks
-  warningCallbacks = [];
-  errorCallbacks = [];
-  completeCallbacks = [];
-  frameProcessedCallbacks = [];
-  sendProgressCallbacks = [];
-  // Sender state
-  sendTimer = null;
-  sendWireFrames = [];
-  sendFrameIndex = 0;
-  sendCanvasTarget;
-  // Receiver state
-  pendingPreFirstFrames = [];
-  storedFrames = /* @__PURE__ */ new Map();
-  knownTotalQrCount;
-  knownFirstFrameCrc;
-  consecutiveCrcErrors = 0;
-  receiveStartTime = null;
-  totalReceivedWireBits = 0;
-  lastQrDetected = false;
-  constructor(config, runtime) {
-    this.config = config ? config.clone() : new AppConfig();
-    this.runtime = runtime;
-  }
-  setRuntime(runtime) {
-    this.runtime = runtime;
-  }
-  getConfig() {
-    return this.config;
-  }
-  getState() {
-    return this.state;
-  }
-  onWarning(callback) {
-    this.warningCallbacks.push(callback);
-  }
-  onError(callback) {
-    this.errorCallbacks.push(callback);
-  }
-  onComplete(callback) {
-    this.completeCallbacks.push(callback);
-  }
-  onSendProgress(callback) {
-    this.sendProgressCallbacks.push(callback);
-  }
-  onFrameProcessed(callback) {
-    this.frameProcessedCallbacks.push(callback);
-    callback(this.buildFrameProcessedEvent());
-  }
-  buildFrameProcessedEvent() {
-    let bps = 0;
-    if (this.receiveStartTime !== null) {
-      const elapsedSec = (performance.now() - this.receiveStartTime) / 1e3;
-      if (elapsedSec > 0) {
-        bps = Math.round(this.totalReceivedWireBits / elapsedSec);
-      }
-    }
-    return {
-      validCount: this.storedFrames.size,
-      pendingCount: this.pendingPreFirstFrames.length,
-      totalCount: this.knownTotalQrCount ?? -1,
-      isQrDetected: this.lastQrDetected,
-      bps
-    };
-  }
-  emitFrameProcessed() {
-    const event = this.buildFrameProcessedEvent();
-    for (const cb of this.frameProcessedCallbacks) {
-      cb(event);
-    }
-  }
-  emitSendProgress() {
-    if (this.sendWireFrames.length === 0) return;
-    const event = {
-      index: this.sendFrameIndex + 1,
-      // 1-based indexing for external users
-      maxIndex: this.sendWireFrames.length
-    };
-    for (const cb of this.sendProgressCallbacks) {
-      cb(event);
-    }
-  }
-  emitWarning(warning) {
-    for (const cb of this.warningCallbacks) {
-      cb(warning);
-    }
-  }
-  emitError(error2) {
-    if (error2.critical) {
-      this.state = "Error";
-      this.resetReceiverState();
-      this.resetSenderState();
-    }
-    for (const cb of this.errorCallbacks) {
-      cb(error2);
-    }
-  }
-  emitComplete(result) {
-    this.state = "Completed";
-    if (this.runtime) {
-      this.runtime.stopCamera();
-    }
-    for (const cb of this.completeCallbacks) {
-      cb(result);
-    }
-  }
-  // ------------------------------------------------------------------
-  // Sender Implementation
-  // ------------------------------------------------------------------
-  async startSend(data, options) {
-    if (this.sendTimer !== null) {
-      return;
-    }
-    if (options) {
-      if (options.qrVersion !== void 0) {
-        this.config.data.qrVersion = options.qrVersion;
-      }
-      if (options.ecLevel !== void 0) {
-        this.config.data.ecLevel = options.ecLevel;
-      }
-      if (options.intervalMs !== void 0) {
-        this.config.transport.intervalMs = options.intervalMs;
-      }
-      if (options.parityMode !== void 0) {
-        this.config.data.parityMode = options.parityMode;
-      }
-      if (options.canvas !== void 0) {
-        this.sendCanvasTarget = options.canvas;
-      }
-    }
-    let encodedResult;
-    try {
-      if (typeof data === "string") {
-        encodedResult = DataApi.encodeText(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
-      } else {
-        encodedResult = DataApi.encodeBytes(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      this.emitError({
-        code: errMsg.includes("ASCII") ? "ASCII_OUT_OF_RANGE" : "SYNTAX_ERROR",
-        message: `Encoding error: ${errMsg}`,
-        critical: true,
-        details: err
-      });
-      return;
-    }
-    this.sendWireFrames = encodedResult.frames.map((f) => new Uint8Array(f.wireBytes));
-    if (this.sendWireFrames.length === 0) {
-      this.emitError({
-        code: "SYNTAX_ERROR",
-        message: "No frames generated from payload",
-        critical: true
-      });
-      return;
-    }
-    this.sendFrameIndex = 0;
-    const interval = this.config.transport.intervalMs;
-    const renderCurrentFrame = () => {
-      const currentFrame = this.getCurrentSendFrame();
-      if (currentFrame && this.runtime) {
-        try {
-          const matrix = DataApi.generateQrMatrix(currentFrame, this.config.data.qrVersion, this.config.data.ecLevel);
-          this.runtime.renderQrModuleMatrix(matrix, {
-            canvas: this.sendCanvasTarget,
-            width: this.config.browserRuntime.canvasWidth,
-            height: this.config.browserRuntime.canvasHeight,
-            ...options?.renderOptions
-          });
-        } catch {
-        }
-      }
-    };
-    renderCurrentFrame();
-    this.emitSendProgress();
-    this.sendTimer = setInterval(() => {
-      if (this.sendWireFrames.length === 0) return;
-      this.sendFrameIndex = (this.sendFrameIndex + 1) % this.sendWireFrames.length;
-      renderCurrentFrame();
-      this.emitSendProgress();
-    }, interval);
-  }
-  getCurrentSendFrame() {
-    if (this.sendWireFrames.length === 0) return null;
-    return this.sendWireFrames[this.sendFrameIndex];
-  }
-  stopSend() {
-    this.resetSenderState();
-  }
-  resetSenderState() {
-    if (this.sendTimer !== null) {
-      clearInterval(this.sendTimer);
-      this.sendTimer = null;
-    }
-    if (this.runtime) {
-      this.runtime.clearCanvas(this.sendCanvasTarget);
-    }
-    this.sendWireFrames = [];
-    this.sendFrameIndex = 0;
-    this.sendCanvasTarget = void 0;
-  }
-  // ------------------------------------------------------------------
-  // Receiver Implementation
-  // ------------------------------------------------------------------
-  async startReceive(options) {
-    if (this.state !== "Idle" && this.state !== "Completed" && this.state !== "Error") {
-      return;
-    }
-    if (options) {
-      if (options.maxConsecutiveCrcErrors !== void 0) {
-        this.config.transport.maxConsecutiveCrcErrors = options.maxConsecutiveCrcErrors;
-      }
-      if (options.maxPendingFramesBeforeFirst !== void 0) {
-        this.config.transport.maxPendingFramesBeforeFirst = options.maxPendingFramesBeforeFirst;
-      }
-      if (options.useWorker !== void 0) {
-        this.config.transport.useWorker = options.useWorker;
-      }
-    }
-    this.resetReceiverState();
-    this.receiveStartTime = performance.now();
-    this.state = "WaitingForFirst";
-    this.emitFrameProcessed();
-  }
-  stopReceive() {
-    if (this.runtime) {
-      this.runtime.stopCamera();
-    }
-    this.resetReceiverState();
-    this.state = "Idle";
-  }
-  resetReceiverState() {
-    this.pendingPreFirstFrames = [];
-    this.storedFrames.clear();
-    this.knownTotalQrCount = void 0;
-    this.knownFirstFrameCrc = void 0;
-    this.consecutiveCrcErrors = 0;
-    this.receiveStartTime = null;
-    this.totalReceivedWireBits = 0;
-    this.lastQrDetected = false;
-    this.emitFrameProcessed();
-  }
-  getPendingPreFirstQueueLength() {
-    return this.pendingPreFirstFrames.length;
-  }
-  /**
-   * Process an incoming raw wire frame array.
-   */
-  processFrame(wireBytes) {
-    if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
-      this.lastQrDetected = false;
-      return;
-    }
-    if (!wireBytes || wireBytes.length === 0) {
-      this.lastQrDetected = false;
-      this.emitFrameProcessed();
-      return;
-    }
-    this.lastQrDetected = true;
-    try {
-      const isStartBitSet = (wireBytes[0] & 128) !== 0;
-      if (this.state === "WaitingForFirst") {
-        if (!isStartBitSet) {
-          if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
-            const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
-            if (!isDuplicate) {
-              this.pendingPreFirstFrames.push(wireBytes);
-            }
-          }
-          return;
-        }
-      }
-      let metadata2;
-      try {
-        metadata2 = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
-      } catch (err) {
-        this.emitError({
-          code: "SYNTAX_ERROR",
-          message: `Syntax error during frame parsing: ${String(err)}`,
-          critical: false
-        });
-        return;
-      }
-      if (this.knownTotalQrCount !== void 0 && metadata2.frameNumber >= this.knownTotalQrCount) {
-        return;
-      }
-      if (metadata2.isFirst) {
-        if (metadata2.version === 0) {
-          this.emitError({
-            code: "INVALID_VERSION",
-            message: "Library Format Version 0 is invalid",
-            critical: true
-          });
-          return;
-        }
-        if (metadata2.version > 1) {
-          this.emitWarning({
-            code: "UNKNOWN_VERSION_CONTINUED",
-            message: `Unknown library format version ${metadata2.version}, continuing processing`,
-            details: { version: metadata2.version }
-          });
-        }
-      }
-      if (this.state === "WaitingForFirst") {
-        if (metadata2.isFirst) {
-          if (metadata2.crcValid) {
-            this.establishFirstQr(wireBytes, metadata2);
-            this.processPendingQueue();
-          } else {
-            this.handleCrcError();
-          }
-        }
-        return;
-      }
-      this.processPostFirstFrame(wireBytes, metadata2);
-    } finally {
-      this.emitFrameProcessed();
-    }
-  }
-  establishFirstQr(wireBytes, metadata2) {
-    this.knownTotalQrCount = metadata2.totalQrCount;
-    this.knownFirstFrameCrc = metadata2.frameCrc;
-    this.storedFrames.set(0, wireBytes);
-    this.totalReceivedWireBits += wireBytes.length * 8;
-    this.state = metadata2.totalQrCount === 1 ? "OverallCrcVerification" : "FirstEstablished";
-    if (metadata2.totalQrCount === 1) {
-      this.checkCompletion();
-    }
-  }
-  removeSupersededPendingFrames(frameNumber) {
-    if (this.pendingPreFirstFrames.length === 0) return;
-    this.pendingPreFirstFrames = this.pendingPreFirstFrames.filter((wire) => {
-      try {
-        const meta = DataApi.parseFrame(wire, this.knownTotalQrCount, this.knownFirstFrameCrc);
-        return meta.frameNumber !== frameNumber;
-      } catch {
-        return false;
-      }
-    });
-  }
-  processPostFirstFrame(wireBytes, metadata2) {
-    if (!metadata2.crcValid) {
-      this.handleCrcError();
-      return;
-    }
-    this.consecutiveCrcErrors = 0;
-    this.removeSupersededPendingFrames(metadata2.frameNumber);
-    const existingWire = this.storedFrames.get(metadata2.frameNumber);
-    if (existingWire) {
-      let existingMeta;
-      try {
-        existingMeta = DataApi.parseFrame(existingWire, this.knownTotalQrCount, this.knownFirstFrameCrc);
-      } catch {
-      }
-      if (metadata2.frameNumber === 0 && metadata2.frameCrc !== this.knownFirstFrameCrc) {
-        for (const key of Array.from(this.storedFrames.keys())) {
-          if (key !== 0) {
-            this.storedFrames.delete(key);
-          }
-        }
-        this.knownFirstFrameCrc = metadata2.frameCrc;
-        this.knownTotalQrCount = metadata2.totalQrCount;
-        this.storedFrames.set(0, wireBytes);
-        this.emitWarning({
-          code: "POST_FIRST_FRAMES_DISCARDED",
-          message: "First Frame CRC changed. Discarded subsequent stored frames."
-        });
-        this.checkCompletion();
-        return;
-      }
-      if (existingMeta && existingMeta.payloadBitLen === metadata2.payloadBitLen) {
-        return;
-      }
-      this.storedFrames.set(metadata2.frameNumber, wireBytes);
-      this.emitWarning({
-        code: "FRAME_CHANGED",
-        message: `Frame ${metadata2.frameNumber} payload length changed`
-      });
-      this.emitWarning({
-        code: "FRAME_REPLACED",
-        message: `Frame ${metadata2.frameNumber} replaced with updated payload`
-      });
-      this.checkCompletion();
-      return;
-    }
-    this.storedFrames.set(metadata2.frameNumber, wireBytes);
-    this.totalReceivedWireBits += wireBytes.length * 8;
-    if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
-      this.state = "Receiving";
-    }
-    this.checkCompletion();
-  }
-  handleCrcError() {
-    this.consecutiveCrcErrors += 1;
-    const maxErrors = this.config.transport.maxConsecutiveCrcErrors;
-    this.emitError({
-      code: "SYNTAX_ERROR",
-      message: `Frame CRC check failed (Consecutive errors: ${this.consecutiveCrcErrors})`,
-      critical: false
-    });
-    if (maxErrors > 0 && this.consecutiveCrcErrors >= maxErrors) {
-      this.emitError({
-        code: "MAX_CRC_ERRORS_EXCEEDED",
-        message: `Consecutive CRC errors exceeded threshold (${maxErrors})`,
-        critical: true
-      });
-    }
-  }
-  processPendingQueue() {
-    if (this.pendingPreFirstFrames.length === 0) return;
-    const queue = [...this.pendingPreFirstFrames];
-    this.pendingPreFirstFrames = [];
-    for (const wireBytes of queue) {
-      try {
-        const metadata2 = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
-        if (this.storedFrames.has(metadata2.frameNumber)) {
-          continue;
-        }
-        this.processPostFirstFrame(wireBytes, metadata2);
-      } catch {
-      }
-    }
-  }
-  checkCompletion() {
-    if (this.knownTotalQrCount === void 0) return;
-    if (this.storedFrames.size < this.knownTotalQrCount) {
-      this.state = "WaitingMissingFrames";
-      return;
-    }
-    for (let i = 0; i < this.knownTotalQrCount; i++) {
-      if (!this.storedFrames.has(i)) {
-        this.state = "WaitingMissingFrames";
-        return;
-      }
-    }
-    this.state = "OverallCrcVerification";
-    const orderedFrames = [];
-    for (let i = 0; i < this.knownTotalQrCount; i++) {
-      orderedFrames.push(this.storedFrames.get(i));
-    }
-    try {
-      const decoded = DataApi.decodeFrames(orderedFrames);
-      this.emitComplete(decoded);
-    } catch (err) {
-      this.emitError({
-        code: "OVERALL_CRC_MISMATCH",
-        message: `Overall CRC verification failed: ${String(err)}`,
-        critical: true,
-        details: err
-      });
-    }
   }
 };
 
@@ -11472,13 +11026,18 @@ async function handleWorkerMessage(msg) {
         break;
       }
       case "encodeBytes": {
-        const { data, maxFrameBits } = msg.payload;
-        result = DataApi.encodeBytes(data instanceof Uint8Array ? data : new Uint8Array(data), maxFrameBits);
+        const { data, maxFrameBits, qrVersion, ecLevel, parityMode } = msg.payload;
+        result = DataApi.encodeBytes(
+          data instanceof Uint8Array ? data : new Uint8Array(data),
+          qrVersion ?? maxFrameBits,
+          ecLevel,
+          parityMode
+        );
         break;
       }
       case "encodeText": {
-        const { text, maxFrameBits } = msg.payload;
-        result = DataApi.encodeText(text, maxFrameBits);
+        const { text, maxFrameBits, qrVersion, ecLevel, parityMode } = msg.payload;
+        result = DataApi.encodeText(text, qrVersion ?? maxFrameBits, ecLevel, parityMode);
         break;
       }
       case "decodeQrImage": {
@@ -11527,6 +11086,553 @@ async function setupWorkerSelfListener() {
   }
 }
 void setupWorkerSelfListener();
+
+// src/api/transportApi.ts
+var TransportApi = class {
+  state = "Idle";
+  config;
+  runtime;
+  // Callbacks
+  warningCallbacks = [];
+  errorCallbacks = [];
+  completeCallbacks = [];
+  frameProcessedCallbacks = [];
+  sendProgressCallbacks = [];
+  // Sender state
+  sendTimer = null;
+  sendWireFrames = [];
+  sendFrameIndex = 0;
+  sendCanvasTarget;
+  // Receiver state
+  pendingPreFirstFrames = [];
+  storedFrames = /* @__PURE__ */ new Map();
+  knownTotalQrCount;
+  knownFirstFrameCrc;
+  consecutiveCrcErrors = 0;
+  receiveStartTime = null;
+  totalReceivedWireBits = 0;
+  lastQrDetected = false;
+  constructor(config, runtime) {
+    this.config = config ? config.clone() : new AppConfig();
+    this.runtime = runtime;
+  }
+  setRuntime(runtime) {
+    this.runtime = runtime;
+  }
+  getConfig() {
+    return this.config;
+  }
+  getState() {
+    return this.state;
+  }
+  onWarning(callback) {
+    this.warningCallbacks.push(callback);
+  }
+  onError(callback) {
+    this.errorCallbacks.push(callback);
+  }
+  onComplete(callback) {
+    this.completeCallbacks.push(callback);
+  }
+  onSendProgress(callback) {
+    this.sendProgressCallbacks.push(callback);
+  }
+  onFrameProcessed(callback) {
+    this.frameProcessedCallbacks.push(callback);
+    callback(this.buildFrameProcessedEvent());
+  }
+  buildFrameProcessedEvent() {
+    let bps = 0;
+    if (this.receiveStartTime !== null) {
+      const elapsedSec = (performance.now() - this.receiveStartTime) / 1e3;
+      if (elapsedSec > 0) {
+        bps = Math.round(this.totalReceivedWireBits / elapsedSec);
+      }
+    }
+    return {
+      validCount: this.storedFrames.size,
+      pendingCount: this.pendingPreFirstFrames.length,
+      totalCount: this.knownTotalQrCount ?? -1,
+      isQrDetected: this.lastQrDetected,
+      bps
+    };
+  }
+  emitFrameProcessed() {
+    const event = this.buildFrameProcessedEvent();
+    for (const cb of this.frameProcessedCallbacks) {
+      cb(event);
+    }
+  }
+  emitSendProgress() {
+    if (this.sendWireFrames.length === 0) return;
+    const event = {
+      index: this.sendFrameIndex + 1,
+      // 1-based indexing for external users
+      maxIndex: this.sendWireFrames.length
+    };
+    for (const cb of this.sendProgressCallbacks) {
+      cb(event);
+    }
+  }
+  emitWarning(warning) {
+    for (const cb of this.warningCallbacks) {
+      cb(warning);
+    }
+  }
+  emitError(error2) {
+    if (error2.critical) {
+      this.state = "Error";
+      this.resetReceiverState();
+      this.resetSenderState();
+    }
+    for (const cb of this.errorCallbacks) {
+      cb(error2);
+    }
+  }
+  emitComplete(result) {
+    this.state = "Completed";
+    if (this.runtime) {
+      this.runtime.stopCamera();
+    }
+    for (const cb of this.completeCallbacks) {
+      cb(result);
+    }
+  }
+  // ------------------------------------------------------------------
+  // Sender Implementation
+  // ------------------------------------------------------------------
+  workerClient = null;
+  shouldUseWorker() {
+    if (!this.config.transport.useWorker) return false;
+    const g = globalThis;
+    const isNode2 = typeof g.process?.versions?.node === "string";
+    if (isNode2) {
+      return Boolean(this.config.transport.workerUrl || this.config.transport.createWorker);
+    }
+    return typeof Worker === "function";
+  }
+  getOrCreateWorkerClient() {
+    if (!this.workerClient || this.workerClient.isDisposed) {
+      this.workerClient = new WorkerClient({
+        enabled: true,
+        fallback: true,
+        workerUrl: this.config.transport.workerUrl,
+        createWorker: this.config.transport.createWorker,
+        workerType: this.config.transport.workerType,
+        timeout: this.config.transport.timeout
+      });
+    }
+    return this.workerClient;
+  }
+  async startSend(data, options) {
+    if (this.sendTimer !== null) {
+      return;
+    }
+    if (options) {
+      if (options.qrVersion !== void 0) {
+        this.config.data.qrVersion = options.qrVersion;
+      }
+      if (options.ecLevel !== void 0) {
+        this.config.data.ecLevel = options.ecLevel;
+      }
+      if (options.intervalMs !== void 0) {
+        this.config.transport.intervalMs = options.intervalMs;
+      }
+      if (options.parityMode !== void 0) {
+        this.config.data.parityMode = options.parityMode;
+      }
+      if (options.canvas !== void 0) {
+        this.sendCanvasTarget = options.canvas;
+      }
+    }
+    let encodedResult;
+    try {
+      const maxFrameBits = this.config.data.maxFrameBits;
+      const payloadOptions = {
+        maxFrameBits,
+        qrVersion: this.config.data.qrVersion,
+        ecLevel: this.config.data.ecLevel,
+        parityMode: this.config.data.parityMode
+      };
+      if (this.shouldUseWorker()) {
+        const worker = this.getOrCreateWorkerClient();
+        if (typeof data === "string") {
+          encodedResult = await worker.request("encodeText", { text: data, ...payloadOptions });
+        } else {
+          encodedResult = await worker.request("encodeBytes", { data, ...payloadOptions });
+        }
+      } else {
+        if (typeof data === "string") {
+          encodedResult = DataApi.encodeText(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
+        } else {
+          encodedResult = DataApi.encodeBytes(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
+        }
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.emitError({
+        code: errMsg.includes("ASCII") ? "ASCII_OUT_OF_RANGE" : "SYNTAX_ERROR",
+        message: `Encoding error: ${errMsg}`,
+        critical: true,
+        details: err
+      });
+      return;
+    }
+    this.sendWireFrames = encodedResult.frames.map((f) => f.wireBytes instanceof Uint8Array ? f.wireBytes : new Uint8Array(f.wireBytes));
+    if (this.sendWireFrames.length === 0) {
+      this.emitError({
+        code: "SYNTAX_ERROR",
+        message: "No frames generated from payload",
+        critical: true
+      });
+      return;
+    }
+    this.sendFrameIndex = 0;
+    const interval = this.config.transport.intervalMs;
+    const renderCurrentFrame = () => {
+      const currentFrame = this.getCurrentSendFrame();
+      if (currentFrame && this.runtime) {
+        try {
+          const matrix = DataApi.generateQrMatrix(currentFrame, this.config.data.qrVersion, this.config.data.ecLevel);
+          this.runtime.renderQrModuleMatrix(matrix, {
+            canvas: this.sendCanvasTarget,
+            width: this.config.browserRuntime.canvasWidth,
+            height: this.config.browserRuntime.canvasHeight,
+            ...options?.renderOptions
+          });
+        } catch {
+        }
+      }
+    };
+    renderCurrentFrame();
+    this.emitSendProgress();
+    this.sendTimer = setInterval(() => {
+      if (this.sendWireFrames.length === 0) return;
+      this.sendFrameIndex = (this.sendFrameIndex + 1) % this.sendWireFrames.length;
+      renderCurrentFrame();
+      this.emitSendProgress();
+    }, interval);
+  }
+  getCurrentSendFrame() {
+    if (this.sendWireFrames.length === 0) return null;
+    return this.sendWireFrames[this.sendFrameIndex];
+  }
+  stopSend() {
+    this.resetSenderState();
+  }
+  resetSenderState() {
+    if (this.sendTimer !== null) {
+      clearInterval(this.sendTimer);
+      this.sendTimer = null;
+    }
+    if (this.runtime) {
+      this.runtime.clearCanvas(this.sendCanvasTarget);
+    }
+    this.sendWireFrames = [];
+    this.sendFrameIndex = 0;
+    this.sendCanvasTarget = void 0;
+    if (this.workerClient) {
+      this.workerClient.dispose();
+      this.workerClient = null;
+    }
+  }
+  // ------------------------------------------------------------------
+  // Receiver Implementation
+  // ------------------------------------------------------------------
+  async startReceive(options) {
+    if (this.state !== "Idle" && this.state !== "Completed" && this.state !== "Error") {
+      return;
+    }
+    if (options) {
+      if (options.maxConsecutiveCrcErrors !== void 0) {
+        this.config.transport.maxConsecutiveCrcErrors = options.maxConsecutiveCrcErrors;
+      }
+      if (options.maxPendingFramesBeforeFirst !== void 0) {
+        this.config.transport.maxPendingFramesBeforeFirst = options.maxPendingFramesBeforeFirst;
+      }
+      if (options.useWorker !== void 0) {
+        this.config.transport.useWorker = options.useWorker;
+      }
+    }
+    this.resetReceiverState();
+    this.receiveStartTime = performance.now();
+    this.state = "WaitingForFirst";
+    this.emitFrameProcessed();
+  }
+  stopReceive() {
+    if (this.runtime) {
+      this.runtime.stopCamera();
+    }
+    this.resetReceiverState();
+    this.state = "Idle";
+  }
+  resetReceiverState() {
+    this.pendingPreFirstFrames = [];
+    this.storedFrames.clear();
+    this.knownTotalQrCount = void 0;
+    this.knownFirstFrameCrc = void 0;
+    this.consecutiveCrcErrors = 0;
+    this.receiveStartTime = null;
+    this.totalReceivedWireBits = 0;
+    this.lastQrDetected = false;
+    if (this.workerClient) {
+      this.workerClient.dispose();
+      this.workerClient = null;
+    }
+    this.emitFrameProcessed();
+  }
+  getPendingPreFirstQueueLength() {
+    return this.pendingPreFirstFrames.length;
+  }
+  /**
+   * Process an incoming raw wire frame array.
+   */
+  parseFrameInternal(wireBytes) {
+    if (this.shouldUseWorker()) {
+      const worker = this.getOrCreateWorkerClient();
+      return worker.request("parseFrame", {
+        wireBytes,
+        knownTotalQrCount: this.knownTotalQrCount,
+        knownFirstFrameCrc: this.knownFirstFrameCrc
+      });
+    }
+    return DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+  }
+  processFrame(wireBytes) {
+    if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
+      this.lastQrDetected = false;
+      return;
+    }
+    if (!wireBytes || wireBytes.length === 0) {
+      this.lastQrDetected = false;
+      this.emitFrameProcessed();
+      return;
+    }
+    this.lastQrDetected = true;
+    const isStartBitSet = (wireBytes[0] & 128) !== 0;
+    if (this.state === "WaitingForFirst") {
+      if (!isStartBitSet) {
+        if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
+          const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
+          if (!isDuplicate) {
+            this.pendingPreFirstFrames.push(wireBytes);
+          }
+        }
+        this.emitFrameProcessed();
+        return;
+      }
+    }
+    const handleParsedMetadata = (metadata2) => {
+      if (this.knownTotalQrCount !== void 0 && metadata2.frameNumber >= this.knownTotalQrCount) {
+        return;
+      }
+      if (metadata2.isFirst) {
+        if (metadata2.version === 0) {
+          this.emitError({
+            code: "INVALID_VERSION",
+            message: "Library Format Version 0 is invalid",
+            critical: true
+          });
+          return;
+        }
+        if (metadata2.version > 1) {
+          this.emitWarning({
+            code: "UNKNOWN_VERSION_CONTINUED",
+            message: `Unknown library format version ${metadata2.version}, continuing processing`,
+            details: { version: metadata2.version }
+          });
+        }
+      }
+      if (this.state === "WaitingForFirst") {
+        if (metadata2.isFirst) {
+          if (metadata2.crcValid) {
+            this.establishFirstQr(wireBytes, metadata2);
+            this.processPendingQueue();
+          } else {
+            this.handleCrcError();
+          }
+        }
+        return;
+      }
+      this.processPostFirstFrame(wireBytes, metadata2);
+    };
+    let isAsync = false;
+    try {
+      const parsed = this.parseFrameInternal(wireBytes);
+      if (parsed instanceof Promise) {
+        isAsync = true;
+        return parsed.then(handleParsedMetadata).catch((err) => {
+          this.emitError({
+            code: "SYNTAX_ERROR",
+            message: `Syntax error during frame parsing: ${String(err)}`,
+            critical: false
+          });
+        }).finally(() => {
+          this.emitFrameProcessed();
+        });
+      } else {
+        handleParsedMetadata(parsed);
+      }
+    } catch (err) {
+      this.emitError({
+        code: "SYNTAX_ERROR",
+        message: `Syntax error during frame parsing: ${String(err)}`,
+        critical: false
+      });
+    } finally {
+      if (!isAsync) {
+        this.emitFrameProcessed();
+      }
+    }
+  }
+  establishFirstQr(wireBytes, metadata2) {
+    this.knownTotalQrCount = metadata2.totalQrCount;
+    this.knownFirstFrameCrc = metadata2.frameCrc;
+    this.storedFrames.set(0, wireBytes);
+    this.totalReceivedWireBits += wireBytes.length * 8;
+    this.state = metadata2.totalQrCount === 1 ? "OverallCrcVerification" : "FirstEstablished";
+    if (metadata2.totalQrCount === 1) {
+      this.checkCompletion();
+    }
+  }
+  removeSupersededPendingFrames(frameNumber) {
+    if (this.pendingPreFirstFrames.length === 0) return;
+    this.pendingPreFirstFrames = this.pendingPreFirstFrames.filter((wire) => {
+      try {
+        const meta = DataApi.parseFrame(wire, this.knownTotalQrCount, this.knownFirstFrameCrc);
+        return meta.frameNumber !== frameNumber;
+      } catch {
+        return false;
+      }
+    });
+  }
+  processPostFirstFrame(wireBytes, metadata2) {
+    if (!metadata2.crcValid) {
+      this.handleCrcError();
+      return;
+    }
+    this.consecutiveCrcErrors = 0;
+    this.removeSupersededPendingFrames(metadata2.frameNumber);
+    const existingWire = this.storedFrames.get(metadata2.frameNumber);
+    if (existingWire) {
+      let existingMeta;
+      try {
+        existingMeta = DataApi.parseFrame(existingWire, this.knownTotalQrCount, this.knownFirstFrameCrc);
+      } catch {
+      }
+      if (metadata2.frameNumber === 0 && metadata2.frameCrc !== this.knownFirstFrameCrc) {
+        for (const key of Array.from(this.storedFrames.keys())) {
+          if (key !== 0) {
+            this.storedFrames.delete(key);
+          }
+        }
+        this.knownFirstFrameCrc = metadata2.frameCrc;
+        this.knownTotalQrCount = metadata2.totalQrCount;
+        this.storedFrames.set(0, wireBytes);
+        this.emitWarning({
+          code: "POST_FIRST_FRAMES_DISCARDED",
+          message: "First Frame CRC changed. Discarded subsequent stored frames."
+        });
+        this.checkCompletion();
+        return;
+      }
+      if (existingMeta && existingMeta.payloadBitLen === metadata2.payloadBitLen) {
+        return;
+      }
+      this.storedFrames.set(metadata2.frameNumber, wireBytes);
+      this.emitWarning({
+        code: "FRAME_CHANGED",
+        message: `Frame ${metadata2.frameNumber} payload length changed`
+      });
+      this.emitWarning({
+        code: "FRAME_REPLACED",
+        message: `Frame ${metadata2.frameNumber} replaced with updated payload`
+      });
+      this.checkCompletion();
+      return;
+    }
+    this.storedFrames.set(metadata2.frameNumber, wireBytes);
+    this.totalReceivedWireBits += wireBytes.length * 8;
+    if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
+      this.state = "Receiving";
+    }
+    this.checkCompletion();
+  }
+  handleCrcError() {
+    this.consecutiveCrcErrors += 1;
+    const maxErrors = this.config.transport.maxConsecutiveCrcErrors;
+    this.emitError({
+      code: "SYNTAX_ERROR",
+      message: `Frame CRC check failed (Consecutive errors: ${this.consecutiveCrcErrors})`,
+      critical: false
+    });
+    if (maxErrors > 0 && this.consecutiveCrcErrors >= maxErrors) {
+      this.emitError({
+        code: "MAX_CRC_ERRORS_EXCEEDED",
+        message: `Consecutive CRC errors exceeded threshold (${maxErrors})`,
+        critical: true
+      });
+    }
+  }
+  processPendingQueue() {
+    if (this.pendingPreFirstFrames.length === 0) return;
+    const queue = [...this.pendingPreFirstFrames];
+    this.pendingPreFirstFrames = [];
+    for (const wireBytes of queue) {
+      try {
+        const metadata2 = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+        if (this.storedFrames.has(metadata2.frameNumber)) {
+          continue;
+        }
+        this.processPostFirstFrame(wireBytes, metadata2);
+      } catch {
+      }
+    }
+  }
+  checkCompletion() {
+    if (this.knownTotalQrCount === void 0) return;
+    if (this.storedFrames.size < this.knownTotalQrCount) {
+      this.state = "WaitingMissingFrames";
+      return;
+    }
+    for (let i = 0; i < this.knownTotalQrCount; i++) {
+      if (!this.storedFrames.has(i)) {
+        this.state = "WaitingMissingFrames";
+        return;
+      }
+    }
+    this.state = "OverallCrcVerification";
+    const orderedFrames = [];
+    for (let i = 0; i < this.knownTotalQrCount; i++) {
+      orderedFrames.push(this.storedFrames.get(i));
+    }
+    if (this.shouldUseWorker()) {
+      const worker = this.getOrCreateWorkerClient();
+      worker.request("decodeFrames", { wireFrames: orderedFrames }).then((decoded) => {
+        this.emitComplete(decoded);
+      }).catch((err) => {
+        this.emitError({
+          code: "OVERALL_CRC_MISMATCH",
+          message: `Overall CRC verification failed: ${String(err)}`,
+          critical: true,
+          details: err
+        });
+      });
+    } else {
+      try {
+        const decoded = DataApi.decodeFrames(orderedFrames);
+        this.emitComplete(decoded);
+      } catch (err) {
+        this.emitError({
+          code: "OVERALL_CRC_MISMATCH",
+          message: `Overall CRC verification failed: ${String(err)}`,
+          critical: true,
+          details: err
+        });
+      }
+    }
+  }
+};
 export {
   AppConfig,
   BrowserRuntimeApi,

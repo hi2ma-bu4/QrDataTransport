@@ -178,6 +178,77 @@ declare class DataApi {
     static decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Uint8Array;
 }
 
+type WorkerRequestType = "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage";
+interface WorkerRequestMessage {
+    id: string;
+    type: WorkerRequestType;
+    payload: any;
+}
+interface WorkerResponseMessage {
+    id: string;
+    type: string;
+    success: boolean;
+    result?: any;
+    error?: string;
+}
+type WorkerMode = "auto" | "module" | "classic";
+type WorkerLike = {
+    postMessage(message: any, transfer?: Transferable[]): void;
+    terminate(): unknown;
+    addEventListener?: (type: string, listener: (event: any) => void) => void;
+    removeEventListener?: (type: string, listener: (event: any) => void) => void;
+    on?: (type: string, listener: (...args: any[]) => void) => unknown;
+    off?: (type: string, listener: (...args: any[]) => void) => unknown;
+};
+interface WorkerClientOptions {
+    /** Worker を使用するか。既定値 false */
+    enabled?: boolean;
+    /** Worker の生成・実行に失敗した場合、直接実行へフォールバックするか。既定値 true */
+    fallback?: boolean;
+    /** Worker の URL。Node.js では原則として指定が必要 */
+    workerUrl?: string | URL;
+    /** Worker を独自に生成する場合の関数 */
+    createWorker?: () => WorkerLike | Promise<WorkerLike>;
+    /** ブラウザ Worker の形式。auto は読み込み元の script 要素から推定 */
+    workerType?: WorkerMode;
+    /** Worker の応答タイムアウト。0 以下なら無効。既定値 30000ms */
+    timeout?: number;
+    /** URL 検索に使うライブラリのファイル名。既定値 QrDataTransport */
+    libraryFileName?: string;
+}
+declare class WorkerClient {
+    private worker;
+    private listeners;
+    private creating;
+    private disposed;
+    private failed;
+    private sequence;
+    private readonly pending;
+    private readonly enabled;
+    private readonly fallback;
+    private readonly timeout;
+    private readonly options;
+    constructor(options?: WorkerClientOptions);
+    get isDisposed(): boolean;
+    get isWorkerAvailable(): boolean;
+    private nextId;
+    private getWorker;
+    private attachListeners;
+    private detachListeners;
+    private settleFallback;
+    private failWorker;
+    request(type: WorkerRequestType, payload: any, transfer?: Transferable[], fallbackPayload?: any): Promise<any>;
+    private executeFallback;
+    decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Promise<Uint8Array>;
+    dispose(): void;
+}
+declare function handleWorkerMessage(msg: WorkerRequestMessage): Promise<WorkerResponseMessage>;
+/**
+ * ブラウザ Worker / Node.js worker_threads でのみ受信ハンドラーを登録する。
+ * メインスレッドでは何も登録しない。
+ */
+declare function setupWorkerSelfListener(): Promise<void>;
+
 declare enum ParityMode {
     None = 0,
     Group8 = 8,
@@ -189,6 +260,10 @@ interface TransportConfigOptions {
     maxPendingFramesBeforeFirst?: number;
     useWorker?: boolean;
     intervalMs?: number;
+    workerUrl?: string | URL;
+    createWorker?: WorkerClientOptions["createWorker"];
+    workerType?: WorkerClientOptions["workerType"];
+    timeout?: number;
 }
 declare class TransportConfig {
     /**
@@ -213,6 +288,11 @@ declare class TransportConfig {
      * Default: 100ms.
      */
     intervalMs: number;
+    /** Worker configuration options */
+    workerUrl?: string | URL;
+    createWorker?: WorkerClientOptions["createWorker"];
+    workerType?: WorkerClientOptions["workerType"];
+    timeout?: number;
     constructor(options?: TransportConfigOptions);
     clone(): TransportConfig;
 }
@@ -355,6 +435,9 @@ declare class TransportApi {
     private emitWarning;
     private emitError;
     private emitComplete;
+    private workerClient;
+    private shouldUseWorker;
+    private getOrCreateWorkerClient;
     startSend(data: Uint8Array | string, options?: SendOptions): Promise<void>;
     getCurrentSendFrame(): Uint8Array | null;
     stopSend(): void;
@@ -366,7 +449,8 @@ declare class TransportApi {
     /**
      * Process an incoming raw wire frame array.
      */
-    processFrame(wireBytes?: Uint8Array | null): void;
+    private parseFrameInternal;
+    processFrame(wireBytes?: Uint8Array | null): void | Promise<void>;
     private establishFirstQr;
     private removeSupersededPendingFrames;
     private processPostFirstFrame;
@@ -374,77 +458,6 @@ declare class TransportApi {
     private processPendingQueue;
     private checkCompletion;
 }
-
-type WorkerRequestType = "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage";
-interface WorkerRequestMessage {
-    id: string;
-    type: WorkerRequestType;
-    payload: any;
-}
-interface WorkerResponseMessage {
-    id: string;
-    type: string;
-    success: boolean;
-    result?: any;
-    error?: string;
-}
-type WorkerMode = "auto" | "module" | "classic";
-type WorkerLike = {
-    postMessage(message: any, transfer?: Transferable[]): void;
-    terminate(): unknown;
-    addEventListener?: (type: string, listener: (event: any) => void) => void;
-    removeEventListener?: (type: string, listener: (event: any) => void) => void;
-    on?: (type: string, listener: (...args: any[]) => void) => unknown;
-    off?: (type: string, listener: (...args: any[]) => void) => unknown;
-};
-interface WorkerClientOptions {
-    /** Worker を使用するか。既定値 false */
-    enabled?: boolean;
-    /** Worker の生成・実行に失敗した場合、直接実行へフォールバックするか。既定値 true */
-    fallback?: boolean;
-    /** Worker の URL。Node.js では原則として指定が必要 */
-    workerUrl?: string | URL;
-    /** Worker を独自に生成する場合の関数 */
-    createWorker?: () => WorkerLike | Promise<WorkerLike>;
-    /** ブラウザ Worker の形式。auto は読み込み元の script 要素から推定 */
-    workerType?: WorkerMode;
-    /** Worker の応答タイムアウト。0 以下なら無効。既定値 30000ms */
-    timeout?: number;
-    /** URL 検索に使うライブラリのファイル名。既定値 QrDataTransport */
-    libraryFileName?: string;
-}
-declare class WorkerClient {
-    private worker;
-    private listeners;
-    private creating;
-    private disposed;
-    private failed;
-    private sequence;
-    private readonly pending;
-    private readonly enabled;
-    private readonly fallback;
-    private readonly timeout;
-    private readonly options;
-    constructor(options?: WorkerClientOptions);
-    get isDisposed(): boolean;
-    get isWorkerAvailable(): boolean;
-    private nextId;
-    private getWorker;
-    private attachListeners;
-    private detachListeners;
-    private settleFallback;
-    private failWorker;
-    request(type: WorkerRequestType, payload: any, transfer?: Transferable[], fallbackPayload?: any): Promise<any>;
-    private executeFallback;
-    decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Promise<Uint8Array>;
-    dispose(): void;
-}
-declare function handleWorkerMessage(msg: WorkerRequestMessage): Promise<WorkerResponseMessage>;
-/**
- * ブラウザ Worker / Node.js worker_threads でのみ受信ハンドラーを登録する。
- * メインスレッドでは何も登録しない。
- */
-declare function setupWorkerSelfListener(): Promise<void>;
 
 export { AppConfig, BrowserRuntimeApi, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, WorkerClient, handleWorkerMessage, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener };
 export type { CameraOptions, DecodedResult, ErrorCode, ReceiveOptions, RenderQrOptions, RuntimeApi, SendOptions, TransportError, TransportState, TransportWarning, WarningCode, WorkerClientOptions };

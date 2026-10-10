@@ -1,4 +1,5 @@
 import { AppConfig, ParityMode } from "../config/index";
+import { WorkerClient } from "../utils/worker";
 import type { FrameMetadata } from "../wasm/interfaces/snows-qr-data-transport-protocol";
 import type { RenderQrOptions, RuntimeApi } from "./browserRuntimeApi";
 import { DataApi, type DecodedResult } from "./dataApi";
@@ -183,6 +184,36 @@ export class TransportApi {
 	// Sender Implementation
 	// ------------------------------------------------------------------
 
+	private workerClient: WorkerClient | null = null;
+
+	private shouldUseWorker(): boolean {
+		if (!this.config.transport.useWorker) return false;
+
+		const g = globalThis as typeof globalThis & {
+			process?: { versions?: { node?: string } };
+		};
+		const isNode = typeof g.process?.versions?.node === "string";
+		if (isNode) {
+			return Boolean(this.config.transport.workerUrl || this.config.transport.createWorker);
+		}
+
+		return typeof Worker === "function";
+	}
+
+	private getOrCreateWorkerClient(): WorkerClient {
+		if (!this.workerClient || this.workerClient.isDisposed) {
+			this.workerClient = new WorkerClient({
+				enabled: true,
+				fallback: true,
+				workerUrl: this.config.transport.workerUrl,
+				createWorker: this.config.transport.createWorker,
+				workerType: this.config.transport.workerType,
+				timeout: this.config.transport.timeout,
+			});
+		}
+		return this.workerClient;
+	}
+
 	public async startSend(data: Uint8Array | string, options?: SendOptions): Promise<void> {
 		// Spec v8 Section 31, 75.1, 79: Ignore duplicate startSend calls while transmission is active
 		if (this.sendTimer !== null) {
@@ -209,10 +240,26 @@ export class TransportApi {
 
 		let encodedResult;
 		try {
-			if (typeof data === "string") {
-				encodedResult = DataApi.encodeText(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
+			const maxFrameBits = this.config.data.maxFrameBits;
+			const payloadOptions = {
+				maxFrameBits,
+				qrVersion: this.config.data.qrVersion,
+				ecLevel: this.config.data.ecLevel,
+				parityMode: this.config.data.parityMode,
+			};
+			if (this.shouldUseWorker()) {
+				const worker = this.getOrCreateWorkerClient();
+				if (typeof data === "string") {
+					encodedResult = await worker.request("encodeText", { text: data, ...payloadOptions });
+				} else {
+					encodedResult = await worker.request("encodeBytes", { data, ...payloadOptions });
+				}
 			} else {
-				encodedResult = DataApi.encodeBytes(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
+				if (typeof data === "string") {
+					encodedResult = DataApi.encodeText(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
+				} else {
+					encodedResult = DataApi.encodeBytes(data, this.config.data.qrVersion, this.config.data.ecLevel, this.config.data.parityMode);
+				}
 			}
 		} catch (err) {
 			const errMsg = err instanceof Error ? err.message : String(err);
@@ -225,7 +272,7 @@ export class TransportApi {
 			return;
 		}
 
-		this.sendWireFrames = encodedResult.frames.map((f) => new Uint8Array(f.wireBytes));
+		this.sendWireFrames = encodedResult.frames.map((f: { wireBytes: Uint8Array | number[] | ArrayBuffer }) => (f.wireBytes instanceof Uint8Array ? f.wireBytes : new Uint8Array(f.wireBytes as ArrayLike<number>)));
 		if (this.sendWireFrames.length === 0) {
 			this.emitError({
 				code: "SYNTAX_ERROR",
@@ -286,6 +333,10 @@ export class TransportApi {
 		this.sendWireFrames = [];
 		this.sendFrameIndex = 0;
 		this.sendCanvasTarget = undefined;
+		if (this.workerClient) {
+			this.workerClient.dispose();
+			this.workerClient = null;
+		}
 	}
 
 	// ------------------------------------------------------------------
@@ -333,6 +384,10 @@ export class TransportApi {
 		this.receiveStartTime = null;
 		this.totalReceivedWireBits = 0;
 		this.lastQrDetected = false;
+		if (this.workerClient) {
+			this.workerClient.dispose();
+			this.workerClient = null;
+		}
 		this.emitFrameProcessed();
 	}
 
@@ -343,7 +398,19 @@ export class TransportApi {
 	/**
 	 * Process an incoming raw wire frame array.
 	 */
-	public processFrame(wireBytes?: Uint8Array | null): void {
+	private parseFrameInternal(wireBytes: Uint8Array): Promise<FrameMetadata> | FrameMetadata {
+		if (this.shouldUseWorker()) {
+			const worker = this.getOrCreateWorkerClient();
+			return worker.request("parseFrame", {
+				wireBytes,
+				knownTotalQrCount: this.knownTotalQrCount,
+				knownFirstFrameCrc: this.knownFirstFrameCrc,
+			});
+		}
+		return DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+	}
+
+	public processFrame(wireBytes?: Uint8Array | null): void | Promise<void> {
 		if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
 			this.lastQrDetected = false;
 			return;
@@ -357,36 +424,24 @@ export class TransportApi {
 
 		this.lastQrDetected = true;
 
-		try {
-			// Spec v8 Section 11 & 32: Start bit is 1 for First QR, 0 for Non-First
-			const isStartBitSet = (wireBytes[0] & 0x80) !== 0;
+		// Spec v8 Section 11 & 32: Start bit is 1 for First QR, 0 for Non-First
+		const isStartBitSet = (wireBytes[0] & 0x80) !== 0;
 
-			if (this.state === "WaitingForFirst") {
-				if (!isStartBitSet) {
-					// Spec v8 Section 32, 33, 34: Non-first frame arriving before First QR -> queue temporarily without parsing or CRC error
-					if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
-						const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
-						if (!isDuplicate) {
-							this.pendingPreFirstFrames.push(wireBytes);
-						}
+		if (this.state === "WaitingForFirst") {
+			if (!isStartBitSet) {
+				// Spec v8 Section 32, 33, 34: Non-first frame arriving before First QR -> queue temporarily without parsing or CRC error
+				if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
+					const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
+					if (!isDuplicate) {
+						this.pendingPreFirstFrames.push(wireBytes);
 					}
-					// Even if queue is full, real-time camera decoding and checking for First QR continues!
-					return;
 				}
-			}
-
-			let metadata: FrameMetadata;
-			try {
-				metadata = DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
-			} catch (err) {
-				this.emitError({
-					code: "SYNTAX_ERROR",
-					message: `Syntax error during frame parsing: ${String(err)}`,
-					critical: false,
-				});
+				this.emitFrameProcessed();
 				return;
 			}
+		}
 
+		const handleParsedMetadata = (metadata: FrameMetadata) => {
 			// Spec v8 Section 41: Out-of-range frame number -> ignore
 			if (this.knownTotalQrCount !== undefined && metadata.frameNumber >= this.knownTotalQrCount) {
 				return;
@@ -425,8 +480,38 @@ export class TransportApi {
 			}
 
 			this.processPostFirstFrame(wireBytes, metadata);
+		};
+
+		let isAsync = false;
+		try {
+			const parsed = this.parseFrameInternal(wireBytes);
+			if (parsed instanceof Promise) {
+				isAsync = true;
+				return parsed
+					.then(handleParsedMetadata)
+					.catch((err) => {
+						this.emitError({
+							code: "SYNTAX_ERROR",
+							message: `Syntax error during frame parsing: ${String(err)}`,
+							critical: false,
+						});
+					})
+					.finally(() => {
+						this.emitFrameProcessed();
+					});
+			} else {
+				handleParsedMetadata(parsed);
+			}
+		} catch (err) {
+			this.emitError({
+				code: "SYNTAX_ERROR",
+				message: `Syntax error during frame parsing: ${String(err)}`,
+				critical: false,
+			});
 		} finally {
-			this.emitFrameProcessed();
+			if (!isAsync) {
+				this.emitFrameProcessed();
+			}
 		}
 	}
 
@@ -582,16 +667,33 @@ export class TransportApi {
 			orderedFrames.push(this.storedFrames.get(i)!);
 		}
 
-		try {
-			const decoded = DataApi.decodeFrames(orderedFrames);
-			this.emitComplete(decoded);
-		} catch (err) {
-			this.emitError({
-				code: "OVERALL_CRC_MISMATCH",
-				message: `Overall CRC verification failed: ${String(err)}`,
-				critical: true,
-				details: err,
-			});
+		if (this.shouldUseWorker()) {
+			const worker = this.getOrCreateWorkerClient();
+			worker
+				.request("decodeFrames", { wireFrames: orderedFrames })
+				.then((decoded) => {
+					this.emitComplete(decoded);
+				})
+				.catch((err) => {
+					this.emitError({
+						code: "OVERALL_CRC_MISMATCH",
+						message: `Overall CRC verification failed: ${String(err)}`,
+						critical: true,
+						details: err,
+					});
+				});
+		} else {
+			try {
+				const decoded = DataApi.decodeFrames(orderedFrames);
+				this.emitComplete(decoded);
+			} catch (err) {
+				this.emitError({
+					code: "OVERALL_CRC_MISMATCH",
+					message: `Overall CRC verification failed: ${String(err)}`,
+					critical: true,
+					details: err,
+				});
+			}
 		}
 	}
 }

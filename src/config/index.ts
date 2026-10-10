@@ -1,4 +1,5 @@
 import { calculateMaxFrameBits } from "../utils/qrCapacity";
+import type { WorkerClientOptions } from "../utils/worker";
 import type { QrEcLevel } from "../wasm/interfaces/snows-qr-data-transport-protocol";
 
 export enum ParityMode {
@@ -13,6 +14,10 @@ export interface TransportConfigOptions {
 	maxPendingFramesBeforeFirst?: number;
 	useWorker?: boolean;
 	intervalMs?: number;
+	workerUrl?: string | URL;
+	createWorker?: WorkerClientOptions["createWorker"];
+	workerType?: WorkerClientOptions["workerType"];
+	timeout?: number;
 }
 
 export class TransportConfig {
@@ -42,6 +47,12 @@ export class TransportConfig {
 	 */
 	public intervalMs: number;
 
+	/** Worker configuration options */
+	public workerUrl?: string | URL;
+	public createWorker?: WorkerClientOptions["createWorker"];
+	public workerType?: WorkerClientOptions["workerType"];
+	public timeout?: number;
+
 	constructor(options?: TransportConfigOptions) {
 		const crcMax = options?.maxConsecutiveCrcErrors ?? 16;
 		if (crcMax < 0) {
@@ -57,6 +68,11 @@ export class TransportConfig {
 
 		this.useWorker = options?.useWorker ?? true;
 		this.intervalMs = options?.intervalMs ?? 100;
+
+		this.workerUrl = options?.workerUrl;
+		this.createWorker = options?.createWorker;
+		this.workerType = options?.workerType;
+		this.timeout = options?.timeout;
 	}
 
 	public clone(): TransportConfig {
@@ -65,6 +81,10 @@ export class TransportConfig {
 			maxPendingFramesBeforeFirst: this.maxPendingFramesBeforeFirst,
 			useWorker: this.useWorker,
 			intervalMs: this.intervalMs,
+			workerUrl: this.workerUrl,
+			createWorker: this.createWorker,
+			workerType: this.workerType,
+			timeout: this.timeout,
 		});
 	}
 }
