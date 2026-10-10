@@ -180,14 +180,23 @@ transport.onFrameProcessed((evt) => {
 /**
  * Compute optimal maximum canvas size based on parent container dimensions.
  */
-function computeOptimalCanvasDimensions(canvasId) {
+function computeOptimalCanvasDimensions(canvasId, qrVersion) {
 	const canvas = document.getElementById(canvasId);
-	if (!canvas || !canvas.parentElement) return { width: 400, height: 400 };
+	if (!canvas || !canvas.parentElement) {
+		return { width: 400, height: 400 };
+	}
 
 	const rect = canvas.parentElement.getBoundingClientRect();
-	const size = Math.floor(Math.min(rect.width, rect.height) - 12);
-	const clampedSize = Math.max(size, 200);
-	return { width: clampedSize, height: clampedSize };
+	const availableSize = Math.max(0, Math.floor(Math.min(rect.width, rect.height) - 12));
+
+	const moduleCount = 17 + 4 * qrVersion;
+	const pixelsPerModule = Math.floor(availableSize / moduleCount);
+	const size = pixelsPerModule * moduleCount;
+
+	return {
+		width: Math.max(size, moduleCount),
+		height: Math.max(size, moduleCount),
+	};
 }
 
 /**
@@ -293,7 +302,7 @@ btnStartSend.addEventListener("click", async () => {
 			payload = await BrowserRuntimeApi.packFileToUint8Array(file);
 		}
 
-		const dims = computeOptimalCanvasDimensions("qr-canvas");
+		const dims = computeOptimalCanvasDimensions("qr-canvas", qrVersion);
 
 		await transport.startSend(payload, {
 			qrVersion,
