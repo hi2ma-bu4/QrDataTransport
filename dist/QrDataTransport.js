@@ -12392,7 +12392,7 @@ var TransportApi = class {
 };
 
 // src/config/version.ts
-var VERSION = "1.0.1";
+var VERSION = "1.0.2";
 export {
   AppConfig,
   BrowserRuntimeApi,
