@@ -1,4 +1,6 @@
-import { AppConfig, BrowserRuntimeApi, DataApi, TransportApi } from "../../dist/QrDataTransport.js";
+import { AppConfig, BrowserRuntimeApi, DataApi, version as QRDT_version, TransportApi } from "../../dist/QrDataTransport.js";
+
+console.log(`QrDataTransport v${QRDT_version} - Browser Test Page`);
 
 const inputTypeSelect = document.getElementById("input-type");
 const qrVersionInput = document.getElementById("qr-version");
@@ -216,7 +218,7 @@ function drawCameraOverlay(ctx, width, height) {
 	const borderColor = isDetected ? "#10b981" : "#ef4444";
 	const cornerColor = isDetected ? "#34d399" : "#f87171";
 
-	const size = Math.min(width, height) * 0.65;
+	const size = Math.min(width, height) * 0.8;
 	const x = (width - size) / 2;
 	const y = (height - size) / 2;
 
