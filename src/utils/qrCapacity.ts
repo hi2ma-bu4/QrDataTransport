@@ -1,5 +1,8 @@
 import type { QrEcLevel } from "../wasm/interfaces/snows-qr-data-transport-protocol";
 
+/**
+ * 誤り訂正ブロックあたりのECCコードワード数テーブル
+ */
 const ECC_CODEWORDS_PER_BLOCK: number[][] = [
 	[0, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
 	[0, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28],
@@ -7,6 +10,9 @@ const ECC_CODEWORDS_PER_BLOCK: number[][] = [
 	[0, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28, 22, 24, 24, 30, 28, 28, 26, 28, 30, 24, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
 ];
 
+/**
+ * 誤り訂正ブロック数テーブル
+ */
 const NUM_ERROR_CORRECTION_BLOCKS: number[][] = [
 	[0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 24, 25],
 	[0, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49],
@@ -15,8 +21,13 @@ const NUM_ERROR_CORRECTION_BLOCKS: number[][] = [
 ];
 
 /**
- * Calculates the maximum wire frame bits available in a QR code of a given version and EC level,
- * accounting for QR Code Byte Segment Header overhead (12 bits for Ver 1..9, 20 bits for Ver 10..40).
+ * 最大ワイヤーフレームビット数を算出
+ *
+ * 指定されたQRバージョンと誤り訂正レベルに基づく最大利用可能ビット数を、QRコードバイトセグメントヘッダーのオーバーヘッド（Ver 1..9: 12ビット、Ver 10..40: 20ビット）を差し引いて算出します。
+ *
+ * @param qrVersion - QRコードバージョン (1 ~ 40)
+ * @param ecLevel - 誤り訂正レベル ('l', 'm', 'q', 'h')
+ * @returns 利用可能な最大フレームビット数
  */
 export function calculateMaxFrameBits(qrVersion: number, ecLevel: QrEcLevel): number {
 	if (qrVersion < 1 || qrVersion > 40) {
@@ -35,7 +46,7 @@ export function calculateMaxFrameBits(qrVersion: number, ecLevel: QrEcLevel): nu
 		}
 	}
 
-	let ecIndex = 1; // Default 'm'
+	let ecIndex = 1; // デフォルトは 'm'
 	switch (ecLevel) {
 		case "l":
 			ecIndex = 0;
@@ -58,7 +69,7 @@ export function calculateMaxFrameBits(qrVersion: number, ecLevel: QrEcLevel): nu
 	const dataCodewords = rawCodewords - eccCodewords * numBlocks;
 	const totalDataBits = dataCodewords * 8;
 
-	// Subtract QR Code Byte Segment Header overhead (4 bits mode indicator + 8/16 bits character count indicator)
+	// QRコードバイトセグメントヘッダーオーバーヘッド（モード指示子4ビット + 文字数指示子8/16ビット）を減算
 	const segmentHeaderBits = version < 10 ? 12 : 20;
 
 	return Math.max(1, totalDataBits - segmentHeaderBits);

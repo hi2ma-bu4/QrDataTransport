@@ -1,11 +1,17 @@
 #[allow(warnings)]
 mod bindings;
 
+/// ビットストリームモジュール
 pub mod bit_stream;
+/// CRC計算モジュール
 pub mod crc;
+/// デコーダーモジュール
 pub mod decoder;
+/// エンコーダーモジュール
 pub mod encoder;
+/// フレーム構造モジュール
 pub mod frame;
+/// Varint可変長整数モジュール
 pub mod varint;
 
 use bindings::exports::snows::qr_data_transport::protocol::{
@@ -18,9 +24,18 @@ use frame::{DecodeContext, ParityMode, decode_frame, parse_frame_metadata};
 use qrcodegen::{QrCode, QrCodeEcc, QrSegment, Version};
 use rxing::{BinaryBitmap, MultiFormatReader, RGBLuminanceSource, Reader};
 
+/// WITコンポーネント構造体
 struct Component;
 
-/// Helper function to encode `InputData` into `EncodeResult`.
+/// 入力データをエンコードヘルパー
+///
+/// # Arguments
+/// * `input` - 入力データ (InputData)
+/// * `max_frame_bits` - 最大フレームビット数
+/// * `parity_mode_raw` - パリティモード生数値
+///
+/// # Returns
+/// * エンコード結果 (EncodeResult)
 fn encode_input(
     input: InputData,
     max_frame_bits: u32,
@@ -47,6 +62,7 @@ fn encode_input(
 }
 
 impl Guest for Component {
+    /// 生バイト列をワイヤーフレームにエンコード
     fn encode_bytes(
         data: Vec<u8>,
         max_frame_bits: u32,
@@ -55,6 +71,7 @@ impl Guest for Component {
         encode_input(InputData::Uint8Array(&data), max_frame_bits, parity_mode)
     }
 
+    /// テキストをワイヤーフレームにエンコード
     fn encode_text(
         text: String,
         max_frame_bits: u32,
@@ -63,6 +80,7 @@ impl Guest for Component {
         encode_input(InputData::String(&text), max_frame_bits, parity_mode)
     }
 
+    /// 単一ワイヤーフレームを解析しCRCを検証
     fn parse_frame(
         wire_bytes: Vec<u8>,
         known_total_qr_count: Option<u32>,
@@ -74,11 +92,11 @@ impl Guest for Component {
             None => None,
         };
 
-        // Parse metadata
+        // メタデータの解析
         let raw_meta = parse_frame_metadata(&wire_bytes, known_total_qr_count, parsed_parity_mode)
             .map_err(|e| e.to_string())?;
 
-        // Perform full frame decoding to verify frame CRC
+        // フレームCRCを検証するため完全なデコードを実行
         let ctx = if known_total_qr_count.is_some() || known_first_frame_crc.is_some() {
             Some(DecodeContext {
                 total_qr_count: known_total_qr_count,
@@ -119,12 +137,13 @@ impl Guest for Component {
         })
     }
 
+    /// ワイヤーフレーム群を復元してデコード
     fn decode_frames(wire_frames: Vec<Vec<u8>>) -> Result<DecodedPayload, String> {
         if wire_frames.is_empty() {
             return Err("wire_frames cannot be empty".to_string());
         }
 
-        // Decode first frame to establish communication context
+        // 通信コンテキスト確立のためFirstフレームをデコード
         let first_frame = decode_frame(&wire_frames[0], None).map_err(|e| e.to_string())?;
         let first_frame_crc = first_frame.frame_crc();
         let total_qr_count = first_frame.total_qr_count();
@@ -165,6 +184,7 @@ impl Guest for Component {
         }
     }
 
+    /// QRコードモジュール行列を生成
     fn generate_qr_matrix(
         wire_bytes: Vec<u8>,
         qr_version: u8,
@@ -206,6 +226,7 @@ impl Guest for Component {
         })
     }
 
+    /// QRコード画像ピクセルをデコード
     fn decode_qr_image(rgba_pixels: Vec<u8>, width: u32, height: u32) -> Result<Vec<u8>, String> {
         let expected_len = (width as usize)
             .checked_mul(height as usize)

@@ -2,18 +2,37 @@ use thiserror::Error;
 
 use crate::bit_stream::{BitReader, BitStreamError, BitWriter};
 
+/// 可変長整数 (Varint) エラー列挙型
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum VarintError {
+    /// ビットストリームエラー
     #[error("Bit stream error: {0}")]
     BitStream(#[from] BitStreamError),
 
+    /// 冗長エンコードエラー
     #[error("Redundant varint encoding for value {value} using {groups} groups")]
-    RedundantEncoding { value: u64, groups: usize },
+    RedundantEncoding {
+        /// エンコード値
+        value: u64,
+        /// グループ数
+        groups: usize,
+    },
 
+    /// 値のオーバーフローエラー
     #[error("Varint value overflow: exceeds 64-bit integer range")]
     ValueOverflow,
 }
 
+/// 可変長整数を書き込み
+///
+/// 7ビット可変長エンコーディング構造 (1継続ビット + 6データビット) をビットストリームに書き込みます。
+///
+/// # Arguments
+/// * `writer` - 出力先のBitWriter
+/// * `value` - 書き込む64ビット無符号整数
+///
+/// # Returns
+/// * 成功時は `Ok(())`
 pub fn write_varint(writer: &mut BitWriter, value: u64) -> Result<(), VarintError> {
     let mut num_groups = 1;
     let mut temp = value;
@@ -36,6 +55,15 @@ pub fn write_varint(writer: &mut BitWriter, value: u64) -> Result<(), VarintErro
     Ok(())
 }
 
+/// 可変長整数を読み込み
+///
+/// ビットストリームから可変長整数を読み込み復元します。冗長エンコーディングやオーバーフローを判定します。
+///
+/// # Arguments
+/// * `reader` - 読み込み元のBitReader
+///
+/// # Returns
+/// * 復元された64ビット無符号整数
 pub fn read_varint(reader: &mut BitReader) -> Result<u64, VarintError> {
     let mut val = 0u64;
     let mut g = 0usize;
@@ -55,7 +83,7 @@ pub fn read_varint(reader: &mut BitReader) -> Result<u64, VarintError> {
             }
         }
 
-        // Check for 64-bit overflow if 11th group adds bits beyond bit 63
+        // 第11グループで63ビットを超えるビットが設定されている場合のオーバーフロー検証
         if g == 10 && chunk > 0x0F {
             return Err(VarintError::ValueOverflow);
         }
@@ -101,16 +129,15 @@ mod tests {
         write_varint(&mut writer, 64).unwrap();
         assert_eq!(writer.bit_len(), 14);
 
-        // Spec Section 10.4:
+        // 仕様書 Section 10.4:
         // [1][000000] [0][100000]
         let mut reader = BitReader::new_with_bit_len(writer.as_bytes(), 14).unwrap();
-        // Read 1st group
+        // 第1グループ読み込み
         assert_eq!(reader.read_bit().unwrap(), true); // Continuation = 1
         assert_eq!(reader.read_bits(6).unwrap(), 0b000000); // Data 6-bit LSB-first = 0
 
-        // Read 2nd group
+        // 第2グループ読み込み
         assert_eq!(reader.read_bit().unwrap(), false); // Continuation = 0
-        // 64's second chunk is 0b000001. In LSB-first order on bitstream: bit 0 (1), bit 1 (0), bit 2 (0), bit 3 (0), bit 4 (0), bit 5 (0) -> 0b100000
         assert_eq!(reader.read_bits(6).unwrap(), 0b100000);
 
         let mut reader2 = BitReader::new_with_bit_len(writer.as_bytes(), 14).unwrap();
@@ -136,7 +163,6 @@ mod tests {
 
     #[test]
     fn test_reject_redundant_varint() {
-        // Construct redundant encoding for 0 using 2 groups:
         let mut writer = BitWriter::new();
         writer.write_bit(true); // continuation = 1
         writer.write_bits(0, 6).unwrap(); // data = 0
@@ -156,7 +182,6 @@ mod tests {
 
     #[test]
     fn test_reject_redundant_varint_63() {
-        // Construct redundant encoding for 63 using 2 groups:
         let mut writer = BitWriter::new();
         writer.write_bit(true); // continuation = 1
         writer.write_bits(0x3F, 6).unwrap(); // data = 63
@@ -176,14 +201,12 @@ mod tests {
 
     #[test]
     fn test_11th_group_overflow() {
-        // Construct 11 groups where 11th group has chunk = 16 (0b010000, 5 bits set), which exceeds 64-bit uint range
         let mut writer = BitWriter::new();
         for _ in 0..10 {
             writer.write_bit(true);
             writer.write_bits(0, 6).unwrap();
         }
         writer.write_bit(false);
-        // LSB-first bits for chunk = 16 (0b010000 -> bit 4 = 1) -> written as 0, 0, 0, 0, 1, 0
         writer.write_bits(0b000010, 6).unwrap();
 
         let mut reader = BitReader::new_with_bit_len(writer.as_bytes(), writer.bit_len()).unwrap();
@@ -208,10 +231,9 @@ mod tests {
 
     #[test]
     fn test_varint_truncated_stream_eof() {
-        // Stream truncated in middle of group
         let mut writer = BitWriter::new();
         writer.write_bit(true);
-        writer.write_bits(0, 3).unwrap(); // only 3 bits of 6-bit data
+        writer.write_bits(0, 3).unwrap();
 
         let mut reader = BitReader::new_with_bit_len(writer.as_bytes(), 4).unwrap();
         let result = read_varint(&mut reader);

@@ -10264,32 +10264,50 @@ var ParityMode = /* @__PURE__ */ ((ParityMode3) => {
 })(ParityMode || {});
 var TransportConfig = class _TransportConfig {
   /**
-   * Maximum consecutive CRC errors before declaring a critical error.
-   * Default: 16.
-   * 0 means unlimited (disabled threshold).
-   * Values < 0 are invalid.
+   * 許容する連続CRCエラーの最大回数
+   *
+   * 0は無制限を意味し、負の値は無効。デフォルト値は16。
    */
   maxConsecutiveCrcErrors;
   /**
-   * Maximum number of pending frame byte arrays saved before receiving First QR.
-   * Default: 256.
+   * First QR受信前に保持する保留フレームの最大数
+   *
+   * デフォルト値は256。
    */
   maxPendingFramesBeforeFirst;
   /**
-   * Whether to use a Worker thread if available.
-   * Default: true.
+   * Web Workerを使用するかどうか
+   *
+   * デフォルト値はtrue。
    */
   useWorker;
   /**
-   * Frame transmission interval in milliseconds for send mode.
-   * Default: 100ms.
+   * 送信時のフレーム描画間隔（ミリ秒）
+   *
+   * デフォルト値は100ms。
    */
   intervalMs;
-  /** Worker configuration options */
+  /**
+   * WorkerのスクリプトURL
+   */
   workerUrl;
+  /**
+   * カスタムWorker生成関数
+   */
   createWorker;
+  /**
+   * Workerの実行タイプ
+   */
   workerType;
+  /**
+   * Workerリクエストのタイムアウト時間（ミリ秒）
+   */
   timeout;
+  /**
+   * TransportConfigのインスタンスを生成
+   *
+   * @param options - 設定オプション
+   */
   constructor(options) {
     const crcMax = options?.maxConsecutiveCrcErrors ?? 16;
     if (crcMax < 0) {
@@ -10308,6 +10326,11 @@ var TransportConfig = class _TransportConfig {
     this.workerType = options?.workerType;
     this.timeout = options?.timeout;
   }
+  /**
+   * 設定オブジェクトを複製
+   *
+   * @returns 複製されたTransportConfigインスタンス
+   */
   clone() {
     return new _TransportConfig({
       maxConsecutiveCrcErrors: this.maxConsecutiveCrcErrors,
@@ -10323,20 +10346,28 @@ var TransportConfig = class _TransportConfig {
 };
 var DataConfig = class _DataConfig {
   /**
-   * QR Code Version (1 ~ 40).
-   * Default: 5.
+   * QRコードバージョン (1 ~ 40)
+   *
+   * デフォルト値は5。
    */
   qrVersion;
   /**
-   * QR Code Error Correction Level ('l', 'm', 'q', 'h').
-   * Default: 'm'.
+   * QRコード誤り訂正レベル ('l', 'm', 'q', 'h')
+   *
+   * デフォルト値は'm'。
    */
   ecLevel;
   /**
-   * Parity Mode (0, 8, 16, 32).
-   * Default: ParityMode.None (0).
+   * パリティモード (0, 8, 16, 32)
+   *
+   * デフォルト値はParityMode.None (0)。
    */
   parityMode;
+  /**
+   * DataConfigのインスタンスを生成
+   *
+   * @param options - 設定オプション
+   */
   constructor(options) {
     const ver = options?.qrVersion ?? 5;
     if (ver < 1 || ver > 40) {
@@ -10355,11 +10386,20 @@ var DataConfig = class _DataConfig {
     this.parityMode = pm;
   }
   /**
-   * Maximum total bits per wire frame calculated automatically from qrVersion and ecLevel.
+   * 1フレームあたりの最大ビット数を取得
+   *
+   * qrVersionとecLevelから自動算出されるワイヤーフレームの最大ビット数。
+   *
+   * @returns 最大ビット数
    */
   get maxFrameBits() {
     return calculateMaxFrameBits(this.qrVersion, this.ecLevel);
   }
+  /**
+   * 設定オブジェクトを複製
+   *
+   * @returns 複製されたDataConfigインスタンス
+   */
   clone() {
     return new _DataConfig({
       qrVersion: this.qrVersion,
@@ -10369,14 +10409,43 @@ var DataConfig = class _DataConfig {
   }
 };
 var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
+  /**
+   * 描画フレームレート (fps)
+   */
   renderFps;
+  /**
+   * カメラフレームレート (fps)
+   */
   cameraFps;
+  /**
+   * QRコード描画幅 (ピクセル)
+   */
   qrWidth;
+  /**
+   * QRコード描画高さ (ピクセル)
+   */
   qrHeight;
+  /**
+   * キャンバス幅 (ピクセル)
+   */
   canvasWidth;
+  /**
+   * キャンバス高さ (ピクセル)
+   */
   canvasHeight;
+  /**
+   * カメラの向き ("environment" | "user" | string)
+   */
   facingMode;
+  /**
+   * カメラのデバイスID
+   */
   deviceId;
+  /**
+   * BrowserRuntimeConfigのインスタンスを生成
+   *
+   * @param options - 設定オプション
+   */
   constructor(options) {
     this.renderFps = options?.renderFps ?? 60;
     this.cameraFps = options?.cameraFps ?? 60;
@@ -10387,6 +10456,11 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
     this.facingMode = options?.facingMode ?? "environment";
     this.deviceId = options?.deviceId;
   }
+  /**
+   * 設定オブジェクトを複製
+   *
+   * @returns 複製されたBrowserRuntimeConfigインスタンス
+   */
   clone() {
     return new _BrowserRuntimeConfig({
       renderFps: this.renderFps,
@@ -10401,14 +10475,33 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
   }
 };
 var AppConfig = class _AppConfig {
+  /**
+   * トランスポート設定
+   */
   transport;
+  /**
+   * データエンコード設定
+   */
   data;
+  /**
+   * ブラウザランタイム設定
+   */
   browserRuntime;
+  /**
+   * AppConfigのインスタンスを生成
+   *
+   * @param options - 統合設定オプション
+   */
   constructor(options) {
     this.transport = new TransportConfig(options?.transport);
     this.data = new DataConfig(options?.data);
     this.browserRuntime = new BrowserRuntimeConfig(options?.browserRuntime);
   }
+  /**
+   * 設定オブジェクトを複製
+   *
+   * @returns 複製されたAppConfigインスタンス
+   */
   clone() {
     return new _AppConfig({
       transport: this.transport.clone(),
@@ -10420,13 +10513,39 @@ var AppConfig = class _AppConfig {
 
 // src/api/browserRuntimeApi.ts
 var BrowserRuntimeApi = class {
+  /**
+   * パックファイルヘッダーサイズ（バイト）
+   */
   static HEADER_SIZE = 2;
+  /**
+   * パックファイルの最大ファイル名長（バイト）
+   */
   static MAX_FILENAME_LENGTH = 65535;
+  /**
+   * ブラウザランタイム設定
+   */
   config;
+  /**
+   * 初期設定オプション
+   */
   initialOptions;
+  /**
+   * カメラメディアストリーム
+   */
   cameraStream = null;
+  /**
+   * カメラ映像動作用HTMLVideoElement
+   */
   cameraVideo = null;
+  /**
+   * カメラキャプチャループのアニメーションID
+   */
   cameraAnimationId = null;
+  /**
+   * BrowserRuntimeApiのインスタンスを生成
+   *
+   * @param config - ランタイム設定または設定オプション
+   */
   constructor(config) {
     if (config instanceof BrowserRuntimeConfig) {
       this.config = config;
@@ -10435,6 +10554,14 @@ var BrowserRuntimeApi = class {
       this.config = new BrowserRuntimeConfig(config);
     }
   }
+  /**
+   * ファイルをUint8Arrayにパッキング
+   *
+   * ファイル名とファイル内容を単一のUint8Array構造に結合します。
+   *
+   * @param file - パッキング対象のFileオブジェクト
+   * @returns パッキングされたUint8Array
+   */
   static async packFileToUint8Array(file) {
     const filenameEncoder = new TextEncoder();
     const filename = filenameEncoder.encode(file.name);
@@ -10448,6 +10575,12 @@ var BrowserRuntimeApi = class {
     result.set(fileData, this.HEADER_SIZE + filename.length);
     return result;
   }
+  /**
+   * パッキングされたUint8Arrayからファイル名とデータを解凍
+   *
+   * @param packed - パッキングされたUint8Array
+   * @returns 解凍されたファイル名とデータ
+   */
   static unpackUint8ArrayToFile(packed) {
     if (packed.length < this.HEADER_SIZE) {
       throw new RangeError("Data is too short to contain a valid header.");
@@ -10462,6 +10595,14 @@ var BrowserRuntimeApi = class {
     const data = packed.subarray(filenameEnd);
     return { name, data };
   }
+  /**
+   * キャンバス要素を解決
+   *
+   * 引数のキャンバス参照またはセレクターからHTMLCanvasElementを取得します。
+   *
+   * @param canvasTarget - キャンバス要素またはID/セレクター
+   * @returns 解決されたHTMLCanvasElement、取得できない場合はnull
+   */
   resolveCanvas(canvasTarget) {
     if (canvasTarget && typeof canvasTarget !== "string") {
       return canvasTarget;
@@ -10481,6 +10622,12 @@ var BrowserRuntimeApi = class {
     }
     return null;
   }
+  /**
+   * QRモジュール行列をキャンバスに描画
+   *
+   * @param matrix - 描画対象のQRモジュール行列
+   * @param options - 描画オプション
+   */
   renderQrModuleMatrix(matrix, options) {
     const canvas = this.resolveCanvas(options?.canvas);
     if (!canvas) {
@@ -10520,6 +10667,11 @@ var BrowserRuntimeApi = class {
       }
     }
   }
+  /**
+   * キャンバス描画をクリア
+   *
+   * @param canvasTarget - クリア対象のキャンバス要素またはID/セレクター
+   */
   clearCanvas(canvasTarget) {
     const canvas = this.resolveCanvas(canvasTarget);
     if (!canvas) {
@@ -10530,6 +10682,11 @@ var BrowserRuntimeApi = class {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
   }
+  /**
+   * 利用可能なビデオ入力デバイス一覧を取得
+   *
+   * @returns デバイス情報の配列
+   */
   async getAvailableVideoDevices() {
     if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
       return [];
@@ -10537,6 +10694,12 @@ var BrowserRuntimeApi = class {
     const devices = await navigator.mediaDevices.enumerateDevices();
     return devices.filter((device) => device.kind === "videoinput");
   }
+  /**
+   * カメラを起動しフレームのキャプチャを開始
+   *
+   * @param onFrame - フレーム取得時のコールバック
+   * @param options - カメラ起動オプション
+   */
   async startCamera(onFrame, options) {
     if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       throw new Error("Camera API (navigator.mediaDevices.getUserMedia) is not available in this environment");
@@ -10615,6 +10778,9 @@ var BrowserRuntimeApi = class {
     };
     this.cameraAnimationId = requestAnimationFrame(captureLoop);
   }
+  /**
+   * カメラを停止
+   */
   stopCamera() {
     if (this.cameraAnimationId !== null && typeof cancelAnimationFrame !== "undefined") {
       cancelAnimationFrame(this.cameraAnimationId);
@@ -10632,6 +10798,11 @@ var BrowserRuntimeApi = class {
       this.cameraVideo = null;
     }
   }
+  /**
+   * Web Workerがサポートされているかを判定
+   *
+   * @returns サポートされている場合はtrue
+   */
   isWorkerSupported() {
     return typeof Worker !== "undefined";
   }
@@ -10649,8 +10820,16 @@ function ensureSharedUint8Array(arr) {
 }
 var DataApi = class {
   /**
-   * Encodes raw bytes into wire frames using WASM protocol core.
-   * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
+   * 生バイト列をワイヤーフレームにエンコード
+   *
+   * WASMプロトコルコアを使用して生バイト列をエンコードします。
+   * qrVersionが40以下の場合は、qrVersionとecLevelからmaxFrameBitsを自動計算します。
+   *
+   * @param data - エンコード対象の生バイト列
+   * @param qrVersion - QRコードバージョン（デフォルト: 5）
+   * @param ecLevel - 誤り訂正レベル（デフォルト: 'm'）
+   * @param parityMode - パリティモード（デフォルト: 0）
+   * @returns エンコード結果
    */
   static encodeBytes(data, qrVersion = 5, ecLevel = "m", parityMode = 0) {
     const bytes = ensureSharedUint8Array(data);
@@ -10658,23 +10837,41 @@ var DataApi = class {
     return protocol.encodeBytes(bytes, maxFrameBits, parityMode);
   }
   /**
-   * Encodes text into wire frames using WASM protocol core.
-   * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
+   * テキストをワイヤーフレームにエンコード
+   *
+   * WASMプロトコルコアを使用してテキストをエンコードします。
+   * qrVersionが40以下の場合は、qrVersionとecLevelからmaxFrameBitsを自動計算します。
+   *
+   * @param text - エンコード対象のテキスト
+   * @param qrVersion - QRコードバージョン（デフォルト: 5）
+   * @param ecLevel - 誤り訂正レベル（デフォルト: 'm'）
+   * @param parityMode - パリティモード（デフォルト: 0）
+   * @returns エンコード結果
    */
   static encodeText(text, qrVersion = 5, ecLevel = "m", parityMode = 0) {
     const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
     return protocol.encodeText(text, maxFrameBits, parityMode);
   }
   /**
-   * Parses a single wire frame and verifies its CRC.
+   * 単一ワイヤーフレームを解析しCRCを検証
+   *
+   * @param wireBytes - 解析対象のフレームバイト列
+   * @param knownTotalQrCount - 既知の総QRフレーム数（オプション）
+   * @param knownFirstFrameCrc - 既知のFirstフレームCRC（オプション）
+   * @param knownParityMode - 既知のパリティモード（オプション）
+   * @returns フレームメタデータ
    */
   static parseFrame(wireBytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode) {
     const bytes = ensureSharedUint8Array(wireBytes);
     return protocol.parseFrame(bytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode);
   }
   /**
-   * Decodes a complete list of wire frames and returns the payload along with its type.
-   * Returns { type: "Uint8Array" | "string", data: Uint8Array | string } according to Spec v8.
+   * ワイヤーフレーム群を復元してペイロードをデコード
+   *
+   * 仕様書v8に準拠して { type: "Uint8Array" | "string", data: Uint8Array | string } を返します。
+   *
+   * @param wireFrames - 受信したワイヤーフレーム配列
+   * @returns デコード結果
    */
   static decodeFrames(wireFrames) {
     const sharedFrames = wireFrames.map(ensureSharedUint8Array);
@@ -10694,14 +10891,28 @@ var DataApi = class {
     throw new Error("Unknown decoded payload tag");
   }
   /**
-   * Generates a binary QR module matrix using qrcodegen via WASM.
+   * QRコードモジュール行列を生成
+   *
+   * WASM経由でqrcodegenを使用し、2値のQRモジュール行列を生成します。
+   *
+   * @param wireBytes - ワイヤーフレームバイト列
+   * @param qrVersion - QRコードバージョン
+   * @param ecLevel - 誤り訂正レベル
+   * @returns QRコードモジュール行列
    */
   static generateQrMatrix(wireBytes, qrVersion, ecLevel) {
     const bytes = ensureSharedUint8Array(wireBytes);
     return protocol.generateQrMatrix(bytes, qrVersion, ecLevel);
   }
   /**
-   * Decodes QR code image pixels (RGBA) to wire bytes using rxing via WASM.
+   * QRコード画像ピクセルをデコード
+   *
+   * WASM経由でrxingを使用し、RGBAピクセル配列からワイヤーフレームバイト列をデコードします。
+   *
+   * @param rgbaPixels - RGBAピクセルバイト配列
+   * @param width - 画像の幅
+   * @param height - 画像の高さ
+   * @returns デコードされたワイヤーフレームバイト列
    */
   static decodeQrImage(rgbaPixels, width, height) {
     const pixels = ensureSharedUint8Array(rgbaPixels);
@@ -10783,34 +10994,98 @@ function isWorkerSupported(options = {}) {
   return typeof globalThis.Worker === "function";
 }
 var WorkerClient = class {
+  /**
+   * 保持するWorkerインスタンス
+   */
   worker = null;
+  /**
+   * 登録されたイベントリスナー群
+   */
   listeners = null;
+  /**
+   * Worker生成Promise
+   */
   creating = null;
+  /**
+   * 破棄済みフラグ
+   */
   disposed = false;
+  /**
+   * 失敗フラグ
+   */
   failed = false;
+  /**
+   * シーケンス番号
+   */
   sequence = 0;
+  /**
+   * Worker準備完了リゾルバ
+   */
   workerReadyResolver = null;
+  /**
+   * 準備確認中のWorkerインスタンス
+   */
   workerReadyWorker = null;
+  /**
+   * 保留中のタスクマップ
+   */
   pending = /* @__PURE__ */ new Map();
+  /**
+   * 有効化フラグ
+   */
   enabled;
+  /**
+   * フォールバック許可フラグ
+   */
   fallback;
+  /**
+   * タイムアウト時間（ミリ秒）
+   */
   timeout;
+  /**
+   * クライアント設定オプション
+   */
   options;
+  /**
+   * WorkerClientのインスタンスを生成
+   *
+   * @param options - WorkerClient設定オプション
+   */
   constructor(options = {}) {
     this.options = options;
     this.enabled = !!options.enabled && isWorkerSupported(options);
     this.fallback = !!options.fallback;
     this.timeout = options.timeout ?? DEFAULT_TIMEOUT;
   }
+  /**
+   * 破棄済みかどうかを取得
+   *
+   * @returns 破棄済みの場合はtrue
+   */
   get isDisposed() {
     return this.disposed;
   }
+  /**
+   * Workerが利用可能かどうかを取得
+   *
+   * @returns 利用可能な場合はtrue
+   */
   get isWorkerAvailable() {
     return this.enabled && !this.disposed && !this.failed;
   }
+  /**
+   * ユニークなリクエストIDを生成
+   *
+   * @returns リクエストID文字列
+   */
   nextId() {
     return `qr-${Date.now()}-${++this.sequence}`;
   }
+  /**
+   * Workerインスタンスを取得または生成
+   *
+   * @returns WorkerLikeインスタンス
+   */
   async getWorker() {
     if (this.disposed) {
       throw new Error("WorkerClient has been disposed.");
@@ -10843,6 +11118,11 @@ var WorkerClient = class {
     });
     return this.creating;
   }
+  /**
+   * Workerイベントリスナーを設定
+   *
+   * @param worker - 対象のWorkerインスタンス
+   */
   attachListeners(worker) {
     const listeners = {
       message: (event) => {
@@ -10891,6 +11171,11 @@ var WorkerClient = class {
       throw new Error("Worker does not support message event listeners.");
     }
   }
+  /**
+   * Workerの準備完了メッセージを待機
+   *
+   * @param worker - 対象のWorkerインスタンス
+   */
   async waitForWorkerReady(worker) {
     if (!worker.postMessage) {
       throw new Error("Worker does not support postMessage.");
@@ -10945,6 +11230,11 @@ var WorkerClient = class {
       }
     }
   }
+  /**
+   * Workerイベントリスナーを解除
+   *
+   * @param worker - 対象のWorkerインスタンス
+   */
   detachListeners(worker) {
     const listeners = this.listeners;
     if (!listeners) return;
@@ -10960,6 +11250,12 @@ var WorkerClient = class {
     }
     this.listeners = null;
   }
+  /**
+   * 失敗タスクのフォールバック処理を実行
+   *
+   * @param id - タスクID
+   * @param task - 保留中タスク
+   */
   settleFallback(id2, task) {
     if (task.settled) return;
     task.settled = true;
@@ -10971,6 +11267,11 @@ var WorkerClient = class {
     }
     void this.executeFallback(task.type, task.payload).then(task.resolve, (error2) => task.reject(toError(error2)));
   }
+  /**
+   * Worker障害発生時の状態切り替え処理
+   *
+   * @param error - 発生したエラー
+   */
   failWorker(error2) {
     if (this.failed || this.disposed) return;
     this.failed = true;
@@ -10989,6 +11290,15 @@ var WorkerClient = class {
       this.settleFallback(id2, task);
     }
   }
+  /**
+   * Workerリクエストを送信
+   *
+   * @param type - リクエスト種別
+   * @param payload - ペイロードデータ
+   * @param transfer - 転送可能オブジェクト配列
+   * @param fallbackPayload - フォールバック時ペイロード
+   * @returns 処理結果プロミス
+   */
   async request(type, payload, transfer = [], fallbackPayload = payload) {
     if (this.disposed) {
       throw new Error("WorkerClient has been disposed.");
@@ -11037,6 +11347,13 @@ var WorkerClient = class {
       }
     });
   }
+  /**
+   * メインスレッド同期フォールバックの実行
+   *
+   * @param type - リクエスト種別
+   * @param payload - ペイロードデータ
+   * @returns 実行結果プロミス
+   */
   async executeFallback(type, payload) {
     if (this.disposed) {
       throw new Error("WorkerClient has been disposed.");
@@ -11051,6 +11368,14 @@ var WorkerClient = class {
     }
     return response.result;
   }
+  /**
+   * QRコード画像ピクセルをWorker経由でデコード
+   *
+   * @param rgbaPixels - RGBAピクセルバイト配列
+   * @param width - 画像幅
+   * @param height - 画像高さ
+   * @returns デコードされたワイヤーフレームバイト列
+   */
   async decodeQrImage(rgbaPixels, width, height) {
     if (!this.enabled || this.failed) {
       const result2 = await this.request("decodeQrImage", {
@@ -11078,6 +11403,9 @@ var WorkerClient = class {
     );
     return result instanceof Uint8Array ? result : new Uint8Array(result);
   }
+  /**
+   * WorkerClientリソースを破棄
+   */
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
@@ -11187,33 +11515,105 @@ void setupWorkerSelfListener();
 
 // src/api/transportApi.ts
 var TransportApi = class {
+  /**
+   * トランスポート状態
+   */
   state = "Idle";
+  /**
+   * アプリケーション設定
+   */
   config;
+  /**
+   * ランタイムAPIインスタンス
+   */
   runtime;
-  // Callbacks
+  /**
+   * 警告コールバック配列
+   */
   warningCallbacks = [];
+  /**
+   * エラーコールバック配列
+   */
   errorCallbacks = [];
+  /**
+   * 完了コールバック配列
+   */
   completeCallbacks = [];
+  /**
+   * フレーム処理完了コールバック配列
+   */
   frameProcessedCallbacks = [];
+  /**
+   * 送信進捗コールバック配列
+   */
   sendProgressCallbacks = [];
-  // Sender state
+  /**
+   * 送信ループタイマー
+   */
   sendTimer = null;
+  /**
+   * 送信用ワイヤーフレーム配列
+   */
   sendWireFrames = [];
+  /**
+   * 送信中フレームインデックス
+   */
   sendFrameIndex = 0;
+  /**
+   * 送信描画先キャンバス参照
+   */
   sendCanvasTarget;
-  // Receiver state
+  /**
+   * First QR受信前の保留フレーム配列
+   */
   pendingPreFirstFrames = [];
+  /**
+   * 受信・保持済みフレームマップ (フレーム番号 -> ワイヤーフレーム)
+   */
   storedFrames = /* @__PURE__ */ new Map();
+  /**
+   * 既知の総QRフレーム数
+   */
   knownTotalQrCount;
+  /**
+   * 既知のFirstフレームCRC
+   */
   knownFirstFrameCrc;
+  /**
+   * 連続CRCエラーカウント
+   */
   consecutiveCrcErrors = 0;
+  /**
+   * 受信開始時刻 (performance.now)
+   */
   receiveStartTime = null;
+  /**
+   * 受信済み総ペイロードビット数
+   */
   totalReceivedPayloadBits = 0;
+  /**
+   * 直前フレームでのQR検出フラグ
+   */
   lastQrDetected = false;
+  /**
+   * Workerクライアントインスタンス
+   */
+  workerClient = null;
+  /**
+   * TransportApiのインスタンスを生成
+   *
+   * @param config - アプリケーション設定
+   * @param runtime - ランタイムAPI
+   */
   constructor(config, runtime) {
     this.config = config ? config.clone() : new AppConfig();
     this.setRuntime(runtime);
   }
+  /**
+   * ランタイムAPIを設定
+   *
+   * @param runtime - ランタイムAPI
+   */
   setRuntime(runtime) {
     this.runtime = runtime;
     if (this.runtime && this.runtime instanceof BrowserRuntimeApi) {
@@ -11227,28 +11627,68 @@ var TransportApi = class {
       }
     }
   }
+  /**
+   * 設定オブジェクトを取得
+   *
+   * @returns 設定オブジェクト
+   */
   getConfig() {
     return this.config;
   }
+  /**
+   * 現在のトランスポート状態を取得
+   *
+   * @returns トランスポート状態
+   */
   getState() {
     return this.state;
   }
+  /**
+   * 警告イベントリスナーを登録
+   *
+   * @param callback - 警告コールバック
+   */
   onWarning(callback) {
     this.warningCallbacks.push(callback);
   }
+  /**
+   * エラーイベントリスナーを登録
+   *
+   * @param callback - エラーコールバック
+   */
   onError(callback) {
     this.errorCallbacks.push(callback);
   }
+  /**
+   * 完了イベントリスナーを登録
+   *
+   * @param callback - 完了コールバック
+   */
   onComplete(callback) {
     this.completeCallbacks.push(callback);
   }
+  /**
+   * 送信進捗イベントリスナーを登録
+   *
+   * @param callback - 送信進捗コールバック
+   */
   onSendProgress(callback) {
     this.sendProgressCallbacks.push(callback);
   }
+  /**
+   * フレーム処理完了イベントリスナーを登録
+   *
+   * @param callback - フレーム処理完了コールバック
+   */
   onFrameProcessed(callback) {
     this.frameProcessedCallbacks.push(callback);
     callback(this.buildFrameProcessedEvent());
   }
+  /**
+   * フレーム処理完了イベントオブジェクトを構築
+   *
+   * @returns フレーム処理完了イベント
+   */
   buildFrameProcessedEvent() {
     let bps = 0;
     if (this.receiveStartTime !== null) {
@@ -11265,28 +11705,44 @@ var TransportApi = class {
       bps
     };
   }
+  /**
+   * フレーム処理完了イベントを発行
+   */
   emitFrameProcessed() {
     const event = this.buildFrameProcessedEvent();
     for (const cb of this.frameProcessedCallbacks) {
       cb(event);
     }
   }
+  /**
+   * 送信進捗イベントを発行
+   */
   emitSendProgress() {
     if (this.sendWireFrames.length === 0) return;
     const event = {
       index: this.sendFrameIndex + 1,
-      // 1-based indexing for external users
+      // 外部利用者向けに1始まりのインデックス
       maxIndex: this.sendWireFrames.length
     };
     for (const cb of this.sendProgressCallbacks) {
       cb(event);
     }
   }
+  /**
+   * 警告イベントを発行
+   *
+   * @param warning - 警告構造体
+   */
   emitWarning(warning) {
     for (const cb of this.warningCallbacks) {
       cb(warning);
     }
   }
+  /**
+   * エラーイベントを発行
+   *
+   * @param error - エラー構造体
+   */
   emitError(error2) {
     if (error2.critical) {
       this.state = "Error";
@@ -11297,6 +11753,11 @@ var TransportApi = class {
       cb(error2);
     }
   }
+  /**
+   * 完了イベントを発行
+   *
+   * @param result - デコード結果
+   */
   emitComplete(result) {
     this.state = "Completed";
     if (this.runtime) {
@@ -11306,10 +11767,11 @@ var TransportApi = class {
       cb(result);
     }
   }
-  // ------------------------------------------------------------------
-  // Sender Implementation
-  // ------------------------------------------------------------------
-  workerClient = null;
+  /**
+   * WorkerClientを取得または生成
+   *
+   * @returns WorkerClientインスタンス
+   */
   getOrCreateWorkerClient() {
     if (!this.workerClient || this.workerClient.isDisposed) {
       this.workerClient = new WorkerClient({
@@ -11323,10 +11785,21 @@ var TransportApi = class {
     }
     return this.workerClient;
   }
+  /**
+   * Workerを使用すべきかを判定
+   *
+   * @returns Workerを使用する場合はtrue
+   */
   shouldUseWorker() {
     if (!this.config.transport.useWorker) return false;
     return this.getOrCreateWorkerClient().isWorkerAvailable;
   }
+  /**
+   * データ送信を開始
+   *
+   * @param data - 送信するデータ (Uint8Array または string)
+   * @param options - 送信オプション
+   */
   async startSend(data, options) {
     if (this.sendTimer !== null) {
       return;
@@ -11416,13 +11889,24 @@ var TransportApi = class {
       this.emitSendProgress();
     }, interval);
   }
+  /**
+   * 現在送信中のフレームバイト列を取得
+   *
+   * @returns 送信中フレームバイト列、送信中でない場合はnull
+   */
   getCurrentSendFrame() {
     if (this.sendWireFrames.length === 0) return null;
     return this.sendWireFrames[this.sendFrameIndex];
   }
+  /**
+   * データ送信を停止
+   */
   stopSend() {
     this.resetSenderState();
   }
+  /**
+   * 送信内部状態をリセット
+   */
   resetSenderState() {
     if (this.sendTimer !== null) {
       clearInterval(this.sendTimer);
@@ -11439,9 +11923,11 @@ var TransportApi = class {
       this.workerClient = null;
     }
   }
-  // ------------------------------------------------------------------
-  // Receiver Implementation
-  // ------------------------------------------------------------------
+  /**
+   * データ受信を開始
+   *
+   * @param options - 受信オプション
+   */
   async startReceive(options) {
     if (this.state !== "Idle" && this.state !== "Completed" && this.state !== "Error") {
       return;
@@ -11462,6 +11948,9 @@ var TransportApi = class {
     this.state = "WaitingForFirst";
     this.emitFrameProcessed();
   }
+  /**
+   * データ受信を停止
+   */
   stopReceive() {
     if (this.runtime) {
       this.runtime.stopCamera();
@@ -11469,6 +11958,9 @@ var TransportApi = class {
     this.resetReceiverState();
     this.state = "Idle";
   }
+  /**
+   * 受信内部状態をリセット
+   */
   resetReceiverState() {
     this.pendingPreFirstFrames = [];
     this.storedFrames.clear();
@@ -11484,11 +11976,21 @@ var TransportApi = class {
     }
     this.emitFrameProcessed();
   }
+  /**
+   * First QR受信前の保留キュー長を取得
+   *
+   * @returns 保留フレーム数
+   */
   getPendingPreFirstQueueLength() {
     return this.pendingPreFirstFrames.length;
   }
   /**
-   * Decode a QR image to wire bytes. Uses Worker when configured or falls back to DataApi.
+   * QRコード画像をワイヤーバイト列にデコード
+   *
+   * @param rgbaPixels - RGBAピクセルバイト配列
+   * @param width - 画像幅
+   * @param height - 画像高さ
+   * @returns デコードされたワイヤーバイト列
    */
   decodeQrImageInternal(rgbaPixels, width, height) {
     if (this.shouldUseWorker()) {
@@ -11498,7 +12000,11 @@ var TransportApi = class {
     return DataApi.decodeQrImage(rgbaPixels, width, height);
   }
   /**
-   * Process an incoming QR image frame (RGBA pixel buffer).
+   * 画像フレーム（RGBAピクセルバッファ）を処理
+   *
+   * @param rgbaPixels - RGBAピクセルバイト配列
+   * @param width - 画像幅
+   * @param height - 画像高さ
    */
   async processImageFrame(rgbaPixels, width, height) {
     if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
@@ -11522,7 +12028,10 @@ var TransportApi = class {
     }
   }
   /**
-   * Process an incoming raw wire frame array.
+   * 生ワイヤーフレーム配列を解析
+   *
+   * @param wireBytes - ワイヤーフレームバイト配列
+   * @returns 解析結果フレームメタデータ
    */
   parseFrameInternal(wireBytes) {
     if (this.shouldUseWorker()) {
@@ -11536,6 +12045,11 @@ var TransportApi = class {
     }
     return DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc, this.config.data.parityMode);
   }
+  /**
+   * 受信した1ワイヤーフレームを処理
+   *
+   * @param wireBytes - ワイヤーフレームバイト配列
+   */
   processFrame(wireBytes) {
     if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
       this.lastQrDetected = false;
@@ -11634,6 +12148,12 @@ var TransportApi = class {
       }
     }
   }
+  /**
+   * First QR受信による通信確立処理
+   *
+   * @param wireBytes - ワイヤーフレームバイト配列
+   * @param metadata - フレームメタデータ
+   */
   establishFirstQr(wireBytes, metadata2) {
     this.knownTotalQrCount = metadata2.totalQrCount;
     this.knownFirstFrameCrc = metadata2.frameCrc;
@@ -11646,6 +12166,11 @@ var TransportApi = class {
       return this.processPendingQueue();
     }
   }
+  /**
+   * 上書きされた保留フレームをクリア
+   *
+   * @param frameNumber - フレーム番号
+   */
   removeSupersededPendingFrames(frameNumber) {
     if (this.pendingPreFirstFrames.length === 0) return;
     if (this.shouldUseWorker()) {
@@ -11673,6 +12198,12 @@ var TransportApi = class {
       });
     }
   }
+  /**
+   * First QR確立後の後続フレームを処理
+   *
+   * @param wireBytes - ワイヤーフレームバイト配列
+   * @param metadata - フレームメタデータ
+   */
   processPostFirstFrame(wireBytes, metadata2) {
     if (!metadata2.crcValid) {
       this.handleCrcError();
@@ -11741,6 +12272,9 @@ var TransportApi = class {
       return continueProcessing();
     }
   }
+  /**
+   * CRCエラー発生時の内部カウント処理
+   */
   handleCrcError() {
     this.consecutiveCrcErrors += 1;
     const maxErrors = this.config.transport.maxConsecutiveCrcErrors;
@@ -11757,6 +12291,9 @@ var TransportApi = class {
       });
     }
   }
+  /**
+   * First QR受信前の保留キューを一括処理
+   */
   processPendingQueue() {
     if (this.pendingPreFirstFrames.length === 0) return;
     const queue = [...this.pendingPreFirstFrames];
@@ -11787,6 +12324,9 @@ var TransportApi = class {
       }
     }
   }
+  /**
+   * 受信完了判定および全フレーム復元・検証処理
+   */
   checkCompletion() {
     if (this.knownTotalQrCount === void 0) return;
     if (this.storedFrames.size < this.knownTotalQrCount) {
@@ -11833,7 +12373,7 @@ var TransportApi = class {
 };
 
 // src/config/version.ts
-var VERSION = "0.5.0";
+var VERSION = "1.0.0";
 export {
   AppConfig,
   BrowserRuntimeApi,

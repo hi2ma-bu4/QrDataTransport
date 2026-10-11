@@ -5,42 +5,58 @@ use crate::frame::{
 };
 use thiserror::Error;
 
-/// Errors that can occur during decoding in the Data API receiver.
+/// Data API 受信側のデコードエラー列挙型
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DecoderError {
+    /// 全体CRC不一致エラー
     #[error("Overall CRC mismatch")]
     OverallCrcMismatch,
 
+    /// Uint8Arrayの非8倍数ビット長エラー
     #[error("Uint8Array payload bit length is not a multiple of 8: {0}")]
     NonByteAlignedUint8Array(usize),
 
+    /// ASCII文字列の非7倍数ビット長エラー
     #[error("ASCII string payload bit length is not a multiple of 7: {0}")]
     InvalidAsciiBitLength(usize),
 
+    /// UTF-8文字列の非8倍数ビット長エラー
     #[error("UTF-8 string payload bit length is not a multiple of 8: {0}")]
     InvalidUtf8BitLength(usize),
 
+    /// 無効なUTF-8シーケンスエラー
     #[error("Invalid UTF-8 sequence: {0}")]
     InvalidUtf8(#[from] std::string::FromUtf8Error),
 
+    /// Firstフレーム不所持エラー
     #[error("First frame is missing in frame set")]
     MissingFirstFrame,
 
+    /// フレームエラー
     #[error("Frame error: {0}")]
     Frame(#[from] FrameError),
 
+    /// ビットストリームエラー
     #[error("BitStream error: {0}")]
     BitStream(#[from] BitStreamError),
 }
 
-/// Decoded result returned by the Data API receiver after restoring payload.
+/// Data API 受信側のデコード結果型
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodedData {
+    /// バイト配列データ
     Uint8Array(Vec<u8>),
+    /// 文字列データ
     String(String),
 }
 
-/// Decodes a complete or parity-restored set of Frames into original Uint8Array or String data.
+/// 受信したフレーム群を元のUint8ArrayまたはStringデータに復元・デコード
+///
+/// # Arguments
+/// * `frames` - 受信フレームリスト
+///
+/// # Returns
+/// * 復元されたデータ (DecodedData)
 pub fn decode_data(frames: &[Frame]) -> Result<DecodedData, DecoderError> {
     let first_frame = frames
         .iter()
@@ -62,9 +78,9 @@ pub fn decode_data(frames: &[Frame]) -> Result<DecodedData, DecoderError> {
         frame_map.insert(f.frame_number(), f.clone());
     }
 
-    // 1. Parity Restoration if parity_mode != None
+    // 1. パリティ補元処理 (parity_mode != None の場合)
     if parity_mode != ParityMode::None && total_qr_count > 2 {
-        let m = parity_mode.group_size() as u32; // 8, 16, 32
+        let m = parity_mode.group_size() as u32;
         let inter_and_parity_end = total_qr_count - 2;
 
         let mut current_fn = 1u32;
@@ -136,19 +152,19 @@ pub fn decode_data(frames: &[Frame]) -> Result<DecodedData, DecoderError> {
 
     let all_frames: Vec<Frame> = frame_map.into_values().collect();
 
-    // 2. Verify Overall CRC
+    // 2. 全体CRC検証
     let crc_valid = verify_overall_crc(&all_frames)?;
     if !crc_valid {
         return Err(DecoderError::OverallCrcMismatch);
     }
 
-    // 3. Concatenate all DATA frame payloads in order
+    // 3. データフレームのペイロード連結
     let concat_writer = concat_data_payload_bits(&all_frames)?;
     let total_bits = concat_writer.bit_len();
     let payload_bytes = concat_writer.as_bytes();
     let mut reader = BitReader::new_with_bit_len(payload_bytes, total_bits)?;
 
-    // 4. Decode according to DataType
+    // 4. データ型に応じてデコード
     match data_type {
         DataType::Uint8Array => {
             if total_bits % 8 != 0 {

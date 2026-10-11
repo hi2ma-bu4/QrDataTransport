@@ -1,5 +1,6 @@
-use crc::{Algorithm, Crc, CRC_32_ISO_HDLC};
+use crc::{Algorithm, CRC_32_ISO_HDLC, Crc};
 
+/// CRC-16/CCITT-FALSE アルゴリズム定義
 pub const CRC_16_CCITT_FALSE: Algorithm<u16> = Algorithm {
     width: 16,
     poly: 0x1021,
@@ -11,12 +12,22 @@ pub const CRC_16_CCITT_FALSE: Algorithm<u16> = Algorithm {
     residue: 0x0000,
 };
 
+/// CRC16計算インスタンス
 pub const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_CCITT_FALSE);
+
+/// CRC32計算インスタンス
 pub const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
-/// Prepares a byte vector from a bit sequence according to Spec Section 25.
-/// If `bit_len` is not a multiple of 8, remaining trailing bits in the last byte
-/// are padded with zeros (masked).
+/// ビット列からCRC計算用バイト配列を生成
+///
+/// 仕様書 Section 25 に従い、bit_len が8の倍数でない場合、最後のバイトの余剰ビットを0でパディング（マスク）します。
+///
+/// # Arguments
+/// * `bytes` - ソースバイトスライス
+/// * `bit_len` - ビット長
+///
+/// # Returns
+/// * CRC計算用のパディング済みバイトベクター
 pub fn bitstream_to_crc_bytes(bytes: &[u8], bit_len: usize) -> Vec<u8> {
     if bit_len == 0 {
         return Vec::new();
@@ -41,25 +52,52 @@ pub fn bitstream_to_crc_bytes(bytes: &[u8], bit_len: usize) -> Vec<u8> {
     result
 }
 
-/// Calculates CRC-16/CCITT-FALSE over a bit sequence of specified length.
+/// ビット列に対するCRC16 checksumを算出
+///
+/// # Arguments
+/// * `data` - データバイトスライス
+/// * `bit_len` - 対象のビット長
+///
+/// # Returns
+/// * 16ビットCRC値
 pub fn crc16_bits(data: &[u8], bit_len: usize) -> u16 {
     let crc_bytes = bitstream_to_crc_bytes(data, bit_len);
     CRC16.checksum(&crc_bytes)
 }
 
-/// Calculates CRC-16/CCITT-FALSE over a full byte slice.
+/// 完全なバイト列に対するCRC16 checksumを算出
+///
+/// # Arguments
+/// * `data` - データバイトスライス
+///
+/// # Returns
+/// * 16ビットCRC値
 pub fn crc16(data: &[u8]) -> u16 {
     CRC16.checksum(data)
 }
 
-/// Calculates CRC-32/ISO-HDLC over a bit sequence of specified length.
-/// For 0 bits input, this returns 0x00000000.
+/// ビット列に対するCRC32 checksumを算出
+///
+/// 入力が0ビットの場合は 0x00000000 を返します。
+///
+/// # Arguments
+/// * `data` - データバイトスライス
+/// * `bit_len` - 対象のビット長
+///
+/// # Returns
+/// * 32ビットCRC値
 pub fn crc32_bits(data: &[u8], bit_len: usize) -> u32 {
     let crc_bytes = bitstream_to_crc_bytes(data, bit_len);
     CRC32.checksum(&crc_bytes)
 }
 
-/// Calculates CRC-32/ISO-HDLC over a full byte slice.
+/// 完全なバイト列に対するCRC32 checksumを算出
+///
+/// # Arguments
+/// * `data` - データバイトスライス
+///
+/// # Returns
+/// * 32ビットCRC値
 pub fn crc32(data: &[u8]) -> u32 {
     CRC32.checksum(data)
 }
@@ -90,12 +128,11 @@ mod tests {
 
     #[test]
     fn test_crc_non_byte_aligned_bits() {
-        // Test a bitstream of 13 bits: 0b11001100_10101xxx
         let raw_bytes = [0b11001100, 0b10101111];
         let crc_bytes = bitstream_to_crc_bytes(&raw_bytes, 13);
         assert_eq!(crc_bytes.len(), 2);
         assert_eq!(crc_bytes[0], 0b11001100);
-        assert_eq!(crc_bytes[1], 0b10101000); // lower 3 bits zeroed out
+        assert_eq!(crc_bytes[1], 0b10101000);
 
         let c16 = crc16_bits(&raw_bytes, 13);
         let expected16 = crc16(&crc_bytes);

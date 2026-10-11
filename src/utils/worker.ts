@@ -1,23 +1,68 @@
 import { DataApi } from "../api/dataApi";
 
+/**
+ * Workerリクエスト種別
+ */
 export type WorkerRequestType = "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage" | "__QRDT_WORKER_PING__" | "__QRDT_WORKER_READY__";
 
+/**
+ * Workerリクエストメッセージ
+ */
 export interface WorkerRequestMessage {
+	/**
+	 * リクエストID
+	 */
 	id: string;
+
+	/**
+	 * リクエスト種別
+	 */
 	type: WorkerRequestType;
+
+	/**
+	 * ペイロードデータ
+	 */
 	payload: any;
 }
 
+/**
+ * Workerレスポンスメッセージ
+ */
 export interface WorkerResponseMessage {
+	/**
+	 * リクエストID
+	 */
 	id: string;
+
+	/**
+	 * レスポンス種別
+	 */
 	type: string;
+
+	/**
+	 * 成功フラグ
+	 */
 	success: boolean;
+
+	/**
+	 * 実行結果データ
+	 */
 	result?: any;
+
+	/**
+	 * エラーメッセージ
+	 */
 	error?: string;
 }
 
+/**
+ * Workerモード
+ */
 type WorkerMode = "auto" | "module" | "classic";
 
+/**
+ * Workerライクインターフェース
+ */
 type WorkerLike = {
 	postMessage(message: any, transfer?: Transferable[]): void;
 	terminate(): unknown;
@@ -27,29 +72,49 @@ type WorkerLike = {
 	off?: (type: string, listener: (...args: any[]) => void) => unknown;
 };
 
+/**
+ * WorkerClient設定オプション
+ */
 export interface WorkerClientOptions {
-	/** Worker を使用するか。既定値 false */
+	/**
+	 * Workerを使用するかどうか（既定値: false）
+	 */
 	enabled?: boolean;
 
-	/** Worker の生成・実行に失敗した場合、直接実行へフォールバックするか。既定値 true */
+	/**
+	 * Worker失敗時に直接実行へフォールバックするかどうか（既定値: true）
+	 */
 	fallback?: boolean;
 
-	/** Worker の URL。Node.js では原則として指定が必要 */
+	/**
+	 * WorkerのURL（Node.js環境では原則指定が必要）
+	 */
 	workerUrl?: string | URL;
 
-	/** Worker を独自に生成する場合の関数 */
+	/**
+	 * カスタムWorker生成関数
+	 */
 	createWorker?: () => WorkerLike | Promise<WorkerLike>;
 
-	/** ブラウザ Worker の形式。auto は読み込み元の script 要素から推定 */
+	/**
+	 * ブラウザWorkerの形式（既定値: 'auto'）
+	 */
 	workerType?: WorkerMode;
 
-	/** Worker の応答タイムアウト。0 以下なら無効。既定値 30000ms */
+	/**
+	 * Worker応答タイムアウト時間（ミリ秒、既定値: 30000ms）
+	 */
 	timeout?: number;
 
-	/** URL 検索に使うライブラリのファイル名。既定値 QrDataTransport */
+	/**
+	 * ライブラリファイル名（既定値: 'QrDataTransport'）
+	 */
 	libraryFileName?: string;
 }
 
+/**
+ * 保留中のタスク定義
+ */
 type PendingTask = {
 	type: WorkerRequestType;
 	payload: any;
@@ -59,6 +124,9 @@ type PendingTask = {
 	settled: boolean;
 };
 
+/**
+ * Workerイベントリスナー集合
+ */
 type WorkerListeners = {
 	message: (event: any) => void;
 	error: (event: any) => void;
@@ -66,11 +134,15 @@ type WorkerListeners = {
 	exit: (code: number) => void;
 };
 
+/**
+ * デフォルトタイムアウト（ミリ秒）
+ */
 const DEFAULT_TIMEOUT = 30_000;
 
 /**
- * 通常の script として読み込まれた場合、実行中に currentScript の URL を保存する。
- * ESM の場合は currentScript が null なので、document.scripts から検索する。
+ * 初期スクリプトURL情報の取得
+ *
+ * 通常のscriptタグで読み込まれた場合のsrcを保持します。
  */
 const INITIAL_SCRIPT_INFO = (() => {
 	if (typeof document === "undefined") {
@@ -86,6 +158,11 @@ const INITIAL_SCRIPT_INFO = (() => {
 	return undefined;
 })();
 
+/**
+ * Node.js環境であるかを判定
+ *
+ * @returns Node.js環境の場合はtrue
+ */
 function isNodeEnvironment(): boolean {
 	const g = globalThis as typeof globalThis & {
 		process?: { versions?: { node?: string } };
@@ -94,10 +171,22 @@ function isNodeEnvironment(): boolean {
 	return typeof g.process?.versions?.node === "string";
 }
 
+/**
+ * 任意の例外値をErrorオブジェクトに変換
+ *
+ * @param error - 変換対象のエラーオブジェクトまたは値
+ * @returns Errorインスタンス
+ */
 function toError(error: unknown): Error {
 	return error instanceof Error ? error : new Error(String(error));
 }
 
+/**
+ * ブラウザ環境用Worker情報を解決
+ *
+ * @param options - WorkerClient設定オプション
+ * @returns URLとWorker形式
+ */
 function resolveBrowserWorkerInfo(options: WorkerClientOptions): { url: string | URL; type: "module" | "classic" } {
 	let url = options.workerUrl ?? INITIAL_SCRIPT_INFO;
 
@@ -134,6 +223,12 @@ function resolveBrowserWorkerInfo(options: WorkerClientOptions): { url: string |
 	return { url, type };
 }
 
+/**
+ * デフォルトWorkerインスタンスを生成
+ *
+ * @param options - WorkerClient設定オプション
+ * @returns 生成されたWorkerLikeインスタンス
+ */
 async function createDefaultWorker(options: WorkerClientOptions): Promise<WorkerLike> {
 	if (isNodeEnvironment()) {
 		if (!options.workerUrl) {
@@ -161,10 +256,22 @@ async function createDefaultWorker(options: WorkerClientOptions): Promise<Worker
 	});
 }
 
+/**
+ * イベントオブジェクトからレスポンスデータを取得
+ *
+ * @param event - メッセージイベント
+ * @returns レスポンスメッセージ
+ */
 function getResponseData(event: any): WorkerResponseMessage {
 	return (event && typeof event === "object" && "data" in event ? event.data : event) as WorkerResponseMessage;
 }
 
+/**
+ * Workerがサポートされているかを判定
+ *
+ * @param options - WorkerClient設定オプション
+ * @returns サポートされている場合はtrue
+ */
 export function isWorkerSupported(options: WorkerClientOptions = {}): boolean {
 	if (options.createWorker) return true;
 	if (isNodeEnvironment()) {
@@ -173,23 +280,80 @@ export function isWorkerSupported(options: WorkerClientOptions = {}): boolean {
 	return typeof globalThis.Worker === "function";
 }
 
+/**
+ * Web Worker通信クライアントクラス
+ */
 export class WorkerClient {
+	/**
+	 * 保持するWorkerインスタンス
+	 */
 	private worker: WorkerLike | null = null;
+
+	/**
+	 * 登録されたイベントリスナー群
+	 */
 	private listeners: WorkerListeners | null = null;
+
+	/**
+	 * Worker生成Promise
+	 */
 	private creating: Promise<WorkerLike> | null = null;
+
+	/**
+	 * 破棄済みフラグ
+	 */
 	private disposed = false;
+
+	/**
+	 * 失敗フラグ
+	 */
 	private failed = false;
+
+	/**
+	 * シーケンス番号
+	 */
 	private sequence = 0;
 
+	/**
+	 * Worker準備完了リゾルバ
+	 */
 	private workerReadyResolver: (() => void) | null = null;
+
+	/**
+	 * 準備確認中のWorkerインスタンス
+	 */
 	private workerReadyWorker: WorkerLike | null = null;
 
+	/**
+	 * 保留中のタスクマップ
+	 */
 	private readonly pending = new Map<string, PendingTask>();
+
+	/**
+	 * 有効化フラグ
+	 */
 	private readonly enabled: boolean;
+
+	/**
+	 * フォールバック許可フラグ
+	 */
 	private readonly fallback: boolean;
+
+	/**
+	 * タイムアウト時間（ミリ秒）
+	 */
 	private readonly timeout: number;
+
+	/**
+	 * クライアント設定オプション
+	 */
 	private readonly options: WorkerClientOptions;
 
+	/**
+	 * WorkerClientのインスタンスを生成
+	 *
+	 * @param options - WorkerClient設定オプション
+	 */
 	constructor(options: WorkerClientOptions = {}) {
 		this.options = options;
 		this.enabled = !!options.enabled && isWorkerSupported(options);
@@ -197,18 +361,38 @@ export class WorkerClient {
 		this.timeout = options.timeout ?? DEFAULT_TIMEOUT;
 	}
 
+	/**
+	 * 破棄済みかどうかを取得
+	 *
+	 * @returns 破棄済みの場合はtrue
+	 */
 	get isDisposed(): boolean {
 		return this.disposed;
 	}
 
+	/**
+	 * Workerが利用可能かどうかを取得
+	 *
+	 * @returns 利用可能な場合はtrue
+	 */
 	get isWorkerAvailable(): boolean {
 		return this.enabled && !this.disposed && !this.failed;
 	}
 
+	/**
+	 * ユニークなリクエストIDを生成
+	 *
+	 * @returns リクエストID文字列
+	 */
 	private nextId(): string {
 		return `qr-${Date.now()}-${++this.sequence}`;
 	}
 
+	/**
+	 * Workerインスタンスを取得または生成
+	 *
+	 * @returns WorkerLikeインスタンス
+	 */
 	private async getWorker(): Promise<WorkerLike> {
 		if (this.disposed) {
 			throw new Error("WorkerClient has been disposed.");
@@ -251,6 +435,11 @@ export class WorkerClient {
 		return this.creating;
 	}
 
+	/**
+	 * Workerイベントリスナーを設定
+	 *
+	 * @param worker - 対象のWorkerインスタンス
+	 */
 	private attachListeners(worker: WorkerLike): void {
 		const listeners: WorkerListeners = {
 			message: (event: any) => {
@@ -312,6 +501,11 @@ export class WorkerClient {
 		}
 	}
 
+	/**
+	 * Workerの準備完了メッセージを待機
+	 *
+	 * @param worker - 対象のWorkerインスタンス
+	 */
 	private async waitForWorkerReady(worker: WorkerLike): Promise<void> {
 		if (!worker.postMessage) {
 			throw new Error("Worker does not support postMessage.");
@@ -377,6 +571,11 @@ export class WorkerClient {
 		}
 	}
 
+	/**
+	 * Workerイベントリスナーを解除
+	 *
+	 * @param worker - 対象のWorkerインスタンス
+	 */
 	private detachListeners(worker: WorkerLike): void {
 		const listeners = this.listeners;
 		if (!listeners) return;
@@ -395,6 +594,12 @@ export class WorkerClient {
 		this.listeners = null;
 	}
 
+	/**
+	 * 失敗タスクのフォールバック処理を実行
+	 *
+	 * @param id - タスクID
+	 * @param task - 保留中タスク
+	 */
 	private settleFallback(id: string, task: PendingTask): void {
 		if (task.settled) return;
 
@@ -411,6 +616,11 @@ export class WorkerClient {
 		void this.executeFallback(task.type, task.payload).then(task.resolve, (error: unknown) => task.reject(toError(error)));
 	}
 
+	/**
+	 * Worker障害発生時の状態切り替え処理
+	 *
+	 * @param error - 発生したエラー
+	 */
 	private failWorker(error: Error): void {
 		if (this.failed || this.disposed) return;
 
@@ -437,6 +647,15 @@ export class WorkerClient {
 		}
 	}
 
+	/**
+	 * Workerリクエストを送信
+	 *
+	 * @param type - リクエスト種別
+	 * @param payload - ペイロードデータ
+	 * @param transfer - 転送可能オブジェクト配列
+	 * @param fallbackPayload - フォールバック時ペイロード
+	 * @returns 処理結果プロミス
+	 */
 	async request(type: WorkerRequestType, payload: any, transfer: Transferable[] = [], fallbackPayload: any = payload): Promise<any> {
 		if (this.disposed) {
 			throw new Error("WorkerClient has been disposed.");
@@ -498,6 +717,13 @@ export class WorkerClient {
 		});
 	}
 
+	/**
+	 * メインスレッド同期フォールバックの実行
+	 *
+	 * @param type - リクエスト種別
+	 * @param payload - ペイロードデータ
+	 * @returns 実行結果プロミス
+	 */
 	private async executeFallback(type: WorkerRequestType, payload: any): Promise<any> {
 		if (this.disposed) {
 			throw new Error("WorkerClient has been disposed.");
@@ -516,6 +742,14 @@ export class WorkerClient {
 		return response.result;
 	}
 
+	/**
+	 * QRコード画像ピクセルをWorker経由でデコード
+	 *
+	 * @param rgbaPixels - RGBAピクセルバイト配列
+	 * @param width - 画像幅
+	 * @param height - 画像高さ
+	 * @returns デコードされたワイヤーフレームバイト列
+	 */
 	async decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Promise<Uint8Array> {
 		if (!this.enabled || this.failed) {
 			const result = await this.request("decodeQrImage", {
@@ -550,6 +784,9 @@ export class WorkerClient {
 		return result instanceof Uint8Array ? result : new Uint8Array(result);
 	}
 
+	/**
+	 * WorkerClientリソースを破棄
+	 */
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
@@ -581,6 +818,12 @@ export class WorkerClient {
 	}
 }
 
+/**
+ * Workerリクエストメッセージを処理
+ *
+ * @param msg - Workerリクエストメッセージ
+ * @returns 処理レスポンスメッセージ
+ */
 export async function handleWorkerMessage(msg: WorkerRequestMessage): Promise<WorkerResponseMessage> {
 	try {
 		let result: any;
@@ -643,11 +886,16 @@ export async function handleWorkerMessage(msg: WorkerRequestMessage): Promise<Wo
 	}
 }
 
+/**
+ * 自身がWorkerスレッドであるかのリスナー初期化フラグ
+ */
 let workerListenerSetup = false;
 
 /**
- * ブラウザ Worker / Node.js worker_threads でのみ受信ハンドラーを登録する。
- * メインスレッドでは何も登録しない。
+ * Worker環境での自己メッセージリスナーをセットアップ
+ *
+ * ブラウザ Worker / Node.js worker_threads でのみ受信ハンドラーを登録します。
+ * メインスレッドでは何も登録しません。
  */
 export async function setupWorkerSelfListener(): Promise<void> {
 	if (workerListenerSetup) return;
@@ -701,7 +949,6 @@ export async function setupWorkerSelfListener(): Promise<void> {
 }
 
 /**
- * Worker 内でライブラリが読み込まれた場合に受信処理を登録する。
- * メインスレッドではリスナーを登録しない。
+ * Worker 内でライブラリが読み込まれた場合に受信処理を自動登録
  */
 void setupWorkerSelfListener();

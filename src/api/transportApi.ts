@@ -4,91 +4,296 @@ import type { FrameMetadata } from "../wasm/interfaces/snows-qr-data-transport-p
 import { BrowserRuntimeApi, type RenderQrOptions, type RuntimeApi } from "./browserRuntimeApi";
 import { DataApi, type DecodedResult } from "./dataApi";
 
+/**
+ * トランスポートプロトコル状態型
+ */
 export type TransportState = "Idle" | "WaitingForFirst" | "FirstEstablished" | "Receiving" | "WaitingMissingFrames" | "OverallCrcVerification" | "Completed" | "Error";
 
+/**
+ * 警告コード型
+ */
 export type WarningCode = "FRAME_CHANGED" | "FRAME_REPLACED" | "POST_FIRST_FRAMES_DISCARDED" | "UNKNOWN_VERSION_CONTINUED";
 
+/**
+ * エラーコード型
+ */
 export type ErrorCode = "INVALID_VERSION" | "UNDEFINED_DATA_TYPE" | "INVALID_TOTAL_QR_COUNT" | "SYNTAX_ERROR" | "ASCII_OUT_OF_RANGE" | "STRING_DECODE_FAILED" | "MAX_CRC_ERRORS_EXCEEDED" | "OVERALL_CRC_MISMATCH";
 
+/**
+ * 警告イベント構造体
+ */
 export interface TransportWarning {
+	/**
+	 * 警告コード
+	 */
 	code: WarningCode;
+
+	/**
+	 * 警告メッセージ
+	 */
 	message: string;
+
+	/**
+	 * 詳細情報
+	 */
 	details?: unknown;
 }
 
+/**
+ * エラーイベント構造体
+ */
 export interface TransportError {
+	/**
+	 * エラーコード
+	 */
 	code: ErrorCode;
+
+	/**
+	 * エラーメッセージ
+	 */
 	message: string;
+
+	/**
+	 * 致命的エラーフラグ
+	 */
 	critical: boolean;
+
+	/**
+	 * 詳細情報
+	 */
 	details?: unknown;
 }
 
+/**
+ * 送信起動オプション
+ */
 export interface SendOptions {
+	/**
+	 * QRコードバージョン
+	 */
 	qrVersion?: number;
+
+	/**
+	 * 誤り訂正レベル ('l', 'm', 'q', 'h')
+	 */
 	ecLevel?: "l" | "m" | "q" | "h";
+
+	/**
+	 * フレーム送信間隔（ミリ秒）
+	 */
 	intervalMs?: number;
+
+	/**
+	 * パリティモード
+	 */
 	parityMode?: ParityMode | 0 | 8 | 16 | 32;
+
+	/**
+	 * 描画先キャンバス
+	 */
 	canvas?: HTMLCanvasElement | string;
+
+	/**
+	 * 描画オプション
+	 */
 	renderOptions?: RenderQrOptions;
 }
 
+/**
+ * 受信起動オプション
+ */
 export interface ReceiveOptions {
+	/**
+	 * 許容連続CRCエラー最大数
+	 */
 	maxConsecutiveCrcErrors?: number;
+
+	/**
+	 * First QR受信前保持フレーム最大数
+	 */
 	maxPendingFramesBeforeFirst?: number;
+
+	/**
+	 * Worker使用フラグ
+	 */
 	useWorker?: boolean;
 }
 
+/**
+ * 送信進捗イベント
+ */
 export interface SendProgressEvent {
+	/**
+	 * 現在のフレームインデックス (1-based)
+	 */
 	index: number;
+
+	/**
+	 * 全フレーム数
+	 */
 	maxIndex: number;
 }
 
+/**
+ * フレーム処理完了イベント
+ */
 export interface FrameProcessedEvent {
+	/**
+	 * 有効受信フレーム数
+	 */
 	validCount: number;
+
+	/**
+	 * 保留フレーム数
+	 */
 	pendingCount: number;
+
+	/**
+	 * 総フレーム数 (-1は不明)
+	 */
 	totalCount: number;
+
+	/**
+	 * QRコード検出フラグ
+	 */
 	isQrDetected: boolean;
+
+	/**
+	 * 転送レート (bps)
+	 */
 	bps: number;
 }
 
+/**
+ * 送受信トランスポート制御APIクラス
+ */
 export class TransportApi {
+	/**
+	 * トランスポート状態
+	 */
 	private state: TransportState = "Idle";
+
+	/**
+	 * アプリケーション設定
+	 */
 	private config: AppConfig;
+
+	/**
+	 * ランタイムAPIインスタンス
+	 */
 	private runtime?: RuntimeApi;
 
-	// Callbacks
+	/**
+	 * 警告コールバック配列
+	 */
 	private warningCallbacks: ((warning: TransportWarning) => void)[] = [];
+
+	/**
+	 * エラーコールバック配列
+	 */
 	private errorCallbacks: ((error: TransportError) => void)[] = [];
+
+	/**
+	 * 完了コールバック配列
+	 */
 	private completeCallbacks: ((result: DecodedResult) => void)[] = [];
+
+	/**
+	 * フレーム処理完了コールバック配列
+	 */
 	private frameProcessedCallbacks: ((event: FrameProcessedEvent) => void)[] = [];
+
+	/**
+	 * 送信進捗コールバック配列
+	 */
 	private sendProgressCallbacks: ((event: SendProgressEvent) => void)[] = [];
 
-	// Sender state
+	/**
+	 * 送信ループタイマー
+	 */
 	private sendTimer: ReturnType<typeof setInterval> | null = null;
+
+	/**
+	 * 送信用ワイヤーフレーム配列
+	 */
 	private sendWireFrames: Uint8Array[] = [];
+
+	/**
+	 * 送信中フレームインデックス
+	 */
 	private sendFrameIndex = 0;
+
+	/**
+	 * 送信描画先キャンバス参照
+	 */
 	private sendCanvasTarget?: HTMLCanvasElement | string;
 
-	// Receiver state
+	/**
+	 * First QR受信前の保留フレーム配列
+	 */
 	private pendingPreFirstFrames: Uint8Array[] = [];
+
+	/**
+	 * 受信・保持済みフレームマップ (フレーム番号 -> ワイヤーフレーム)
+	 */
 	private storedFrames: Map<number, Uint8Array> = new Map();
+
+	/**
+	 * 既知の総QRフレーム数
+	 */
 	private knownTotalQrCount?: number;
+
+	/**
+	 * 既知のFirstフレームCRC
+	 */
 	private knownFirstFrameCrc?: number;
+
+	/**
+	 * 連続CRCエラーカウント
+	 */
 	private consecutiveCrcErrors = 0;
+
+	/**
+	 * 受信開始時刻 (performance.now)
+	 */
 	private receiveStartTime: number | null = null;
+
+	/**
+	 * 受信済み総ペイロードビット数
+	 */
 	private totalReceivedPayloadBits = 0;
+
+	/**
+	 * 直前フレームでのQR検出フラグ
+	 */
 	private lastQrDetected = false;
 
+	/**
+	 * Workerクライアントインスタンス
+	 */
+	private workerClient: WorkerClient | null = null;
+
+	/**
+	 * TransportApiのインスタンスを生成
+	 *
+	 * @param config - アプリケーション設定
+	 * @param runtime - ランタイムAPI
+	 */
 	constructor(config?: AppConfig, runtime?: RuntimeApi) {
 		this.config = config ? config.clone() : new AppConfig();
 		this.setRuntime(runtime);
 	}
 
+	/**
+	 * ランタイムAPIを設定
+	 *
+	 * @param runtime - ランタイムAPI
+	 */
 	public setRuntime(runtime?: RuntimeApi): void {
 		this.runtime = runtime;
 		if (this.runtime && this.runtime instanceof BrowserRuntimeApi) {
 			if (this.runtime.initialOptions) {
-				// Runtime's constructor options take precedence over transport's config.browserRuntime
+				// runtime側のinitialOptionsをトランスポート設定に優先適用
 				this.runtime.config = new BrowserRuntimeConfig({
 					...this.config.browserRuntime,
 					...this.runtime.initialOptions,
@@ -99,36 +304,76 @@ export class TransportApi {
 		}
 	}
 
+	/**
+	 * 設定オブジェクトを取得
+	 *
+	 * @returns 設定オブジェクト
+	 */
 	public getConfig(): AppConfig {
 		return this.config;
 	}
 
+	/**
+	 * 現在のトランスポート状態を取得
+	 *
+	 * @returns トランスポート状態
+	 */
 	public getState(): TransportState {
 		return this.state;
 	}
 
+	/**
+	 * 警告イベントリスナーを登録
+	 *
+	 * @param callback - 警告コールバック
+	 */
 	public onWarning(callback: (warning: TransportWarning) => void): void {
 		this.warningCallbacks.push(callback);
 	}
 
+	/**
+	 * エラーイベントリスナーを登録
+	 *
+	 * @param callback - エラーコールバック
+	 */
 	public onError(callback: (error: TransportError) => void): void {
 		this.errorCallbacks.push(callback);
 	}
 
+	/**
+	 * 完了イベントリスナーを登録
+	 *
+	 * @param callback - 完了コールバック
+	 */
 	public onComplete(callback: (result: DecodedResult) => void): void {
 		this.completeCallbacks.push(callback);
 	}
 
+	/**
+	 * 送信進捗イベントリスナーを登録
+	 *
+	 * @param callback - 送信進捗コールバック
+	 */
 	public onSendProgress(callback: (event: SendProgressEvent) => void): void {
 		this.sendProgressCallbacks.push(callback);
 	}
 
+	/**
+	 * フレーム処理完了イベントリスナーを登録
+	 *
+	 * @param callback - フレーム処理完了コールバック
+	 */
 	public onFrameProcessed(callback: (event: FrameProcessedEvent) => void): void {
 		this.frameProcessedCallbacks.push(callback);
-		// Emit initial status when subscribing
+		// 購読開始時に初期ステータスを発行
 		callback(this.buildFrameProcessedEvent());
 	}
 
+	/**
+	 * フレーム処理完了イベントオブジェクトを構築
+	 *
+	 * @returns フレーム処理完了イベント
+	 */
 	private buildFrameProcessedEvent(): FrameProcessedEvent {
 		let bps = 0;
 		if (this.receiveStartTime !== null) {
@@ -146,6 +391,9 @@ export class TransportApi {
 		};
 	}
 
+	/**
+	 * フレーム処理完了イベントを発行
+	 */
 	private emitFrameProcessed(): void {
 		const event = this.buildFrameProcessedEvent();
 		for (const cb of this.frameProcessedCallbacks) {
@@ -153,10 +401,13 @@ export class TransportApi {
 		}
 	}
 
+	/**
+	 * 送信進捗イベントを発行
+	 */
 	private emitSendProgress(): void {
 		if (this.sendWireFrames.length === 0) return;
 		const event: SendProgressEvent = {
-			index: this.sendFrameIndex + 1, // 1-based indexing for external users
+			index: this.sendFrameIndex + 1, // 外部利用者向けに1始まりのインデックス
 			maxIndex: this.sendWireFrames.length,
 		};
 		for (const cb of this.sendProgressCallbacks) {
@@ -164,12 +415,22 @@ export class TransportApi {
 		}
 	}
 
+	/**
+	 * 警告イベントを発行
+	 *
+	 * @param warning - 警告構造体
+	 */
 	private emitWarning(warning: TransportWarning): void {
 		for (const cb of this.warningCallbacks) {
 			cb(warning);
 		}
 	}
 
+	/**
+	 * エラーイベントを発行
+	 *
+	 * @param error - エラー構造体
+	 */
 	private emitError(error: TransportError): void {
 		if (error.critical) {
 			this.state = "Error";
@@ -181,6 +442,11 @@ export class TransportApi {
 		}
 	}
 
+	/**
+	 * 完了イベントを発行
+	 *
+	 * @param result - デコード結果
+	 */
 	private emitComplete(result: DecodedResult): void {
 		this.state = "Completed";
 		if (this.runtime) {
@@ -191,12 +457,11 @@ export class TransportApi {
 		}
 	}
 
-	// ------------------------------------------------------------------
-	// Sender Implementation
-	// ------------------------------------------------------------------
-
-	private workerClient: WorkerClient | null = null;
-
+	/**
+	 * WorkerClientを取得または生成
+	 *
+	 * @returns WorkerClientインスタンス
+	 */
 	private getOrCreateWorkerClient(): WorkerClient {
 		if (!this.workerClient || this.workerClient.isDisposed) {
 			this.workerClient = new WorkerClient({
@@ -211,13 +476,24 @@ export class TransportApi {
 		return this.workerClient;
 	}
 
+	/**
+	 * Workerを使用すべきかを判定
+	 *
+	 * @returns Workerを使用する場合はtrue
+	 */
 	private shouldUseWorker(): boolean {
 		if (!this.config.transport.useWorker) return false;
 		return this.getOrCreateWorkerClient().isWorkerAvailable;
 	}
 
+	/**
+	 * データ送信を開始
+	 *
+	 * @param data - 送信するデータ (Uint8Array または string)
+	 * @param options - 送信オプション
+	 */
 	public async startSend(data: Uint8Array | string, options?: SendOptions): Promise<void> {
-		// Spec v8 Section 31, 75.1, 79: Ignore duplicate startSend calls while transmission is active
+		// 仕様書v8 Section 31, 75.1, 79: 送信動作中の重複呼び出しは無視
 		if (this.sendTimer !== null) {
 			return;
 		}
@@ -299,7 +575,7 @@ export class TransportApi {
 						...options?.renderOptions,
 					});
 				} catch {
-					// Ignore render errors in headless environments
+					// ヘッド環境での描画エラーは無視
 				}
 			}
 		};
@@ -315,15 +591,26 @@ export class TransportApi {
 		}, interval);
 	}
 
+	/**
+	 * 現在送信中のフレームバイト列を取得
+	 *
+	 * @returns 送信中フレームバイト列、送信中でない場合はnull
+	 */
 	public getCurrentSendFrame(): Uint8Array | null {
 		if (this.sendWireFrames.length === 0) return null;
 		return this.sendWireFrames[this.sendFrameIndex];
 	}
 
+	/**
+	 * データ送信を停止
+	 */
 	public stopSend(): void {
 		this.resetSenderState();
 	}
 
+	/**
+	 * 送信内部状態をリセット
+	 */
 	private resetSenderState(): void {
 		if (this.sendTimer !== null) {
 			clearInterval(this.sendTimer);
@@ -341,12 +628,13 @@ export class TransportApi {
 		}
 	}
 
-	// ------------------------------------------------------------------
-	// Receiver Implementation
-	// ------------------------------------------------------------------
-
+	/**
+	 * データ受信を開始
+	 *
+	 * @param options - 受信オプション
+	 */
 	public async startReceive(options?: ReceiveOptions): Promise<void> {
-		// Spec v8 Section 75.1, 79: Ignore duplicate startReceive calls when already receiving
+		// 仕様書v8 Section 75.1, 79: 受信処理中の重複呼び出しは無視
 		if (this.state !== "Idle" && this.state !== "Completed" && this.state !== "Error") {
 			return;
 		}
@@ -369,6 +657,9 @@ export class TransportApi {
 		this.emitFrameProcessed();
 	}
 
+	/**
+	 * データ受信を停止
+	 */
 	public stopReceive(): void {
 		if (this.runtime) {
 			this.runtime.stopCamera();
@@ -377,6 +668,9 @@ export class TransportApi {
 		this.state = "Idle";
 	}
 
+	/**
+	 * 受信内部状態をリセット
+	 */
 	private resetReceiverState(): void {
 		this.pendingPreFirstFrames = [];
 		this.storedFrames.clear();
@@ -393,12 +687,22 @@ export class TransportApi {
 		this.emitFrameProcessed();
 	}
 
+	/**
+	 * First QR受信前の保留キュー長を取得
+	 *
+	 * @returns 保留フレーム数
+	 */
 	public getPendingPreFirstQueueLength(): number {
 		return this.pendingPreFirstFrames.length;
 	}
 
 	/**
-	 * Decode a QR image to wire bytes. Uses Worker when configured or falls back to DataApi.
+	 * QRコード画像をワイヤーバイト列にデコード
+	 *
+	 * @param rgbaPixels - RGBAピクセルバイト配列
+	 * @param width - 画像幅
+	 * @param height - 画像高さ
+	 * @returns デコードされたワイヤーバイト列
 	 */
 	private decodeQrImageInternal(rgbaPixels: Uint8Array, width: number, height: number): Promise<Uint8Array> | Uint8Array {
 		if (this.shouldUseWorker()) {
@@ -409,7 +713,11 @@ export class TransportApi {
 	}
 
 	/**
-	 * Process an incoming QR image frame (RGBA pixel buffer).
+	 * 画像フレーム（RGBAピクセルバッファ）を処理
+	 *
+	 * @param rgbaPixels - RGBAピクセルバイト配列
+	 * @param width - 画像幅
+	 * @param height - 画像高さ
 	 */
 	public async processImageFrame(rgbaPixels: Uint8Array, width: number, height: number): Promise<void> {
 		if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
@@ -436,7 +744,10 @@ export class TransportApi {
 	}
 
 	/**
-	 * Process an incoming raw wire frame array.
+	 * 生ワイヤーフレーム配列を解析
+	 *
+	 * @param wireBytes - ワイヤーフレームバイト配列
+	 * @returns 解析結果フレームメタデータ
 	 */
 	private parseFrameInternal(wireBytes: Uint8Array): Promise<FrameMetadata> | FrameMetadata {
 		if (this.shouldUseWorker()) {
@@ -451,6 +762,11 @@ export class TransportApi {
 		return DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc, this.config.data.parityMode);
 	}
 
+	/**
+	 * 受信した1ワイヤーフレームを処理
+	 *
+	 * @param wireBytes - ワイヤーフレームバイト配列
+	 */
 	public processFrame(wireBytes?: Uint8Array | null): void | Promise<void> {
 		if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
 			this.lastQrDetected = false;
@@ -465,12 +781,12 @@ export class TransportApi {
 
 		this.lastQrDetected = true;
 
-		// Spec v8 Section 11 & 32: Start bit is 1 for First QR, 0 for Non-First
+		// 仕様書v8 Section 11 & 32: スタートビットはFirst QRで1, Non-Firstで0
 		const isStartBitSet = (wireBytes[0] & 0x80) !== 0;
 
 		if (this.state === "WaitingForFirst") {
 			if (!isStartBitSet) {
-				// Spec v8 Section 32, 33, 34: Non-first frame arriving before First QR -> queue temporarily without parsing or CRC error
+				// 仕様書v8 Section 32, 33, 34: First QR到着前のNon-firstフレームはパースやCRCエラーカウントを発生させずに保留キューに追加
 				if (this.pendingPreFirstFrames.length < this.config.transport.maxPendingFramesBeforeFirst) {
 					const isDuplicate = this.pendingPreFirstFrames.some((b) => b.length === wireBytes.length && b.every((val, idx) => val === wireBytes[idx]));
 					if (!isDuplicate) {
@@ -483,12 +799,12 @@ export class TransportApi {
 		}
 
 		const handleParsedMetadata = (metadata: FrameMetadata): void | Promise<void> => {
-			// Spec v8 Section 41: Out-of-range frame number -> ignore
+			// 仕様書v8 Section 41: 範囲外のフレーム番号は無視
 			if (this.knownTotalQrCount !== undefined && metadata.frameNumber >= this.knownTotalQrCount) {
 				return;
 			}
 
-			// Version 0 check applies only to First QR (since Non-First frames have no Version field)
+			// バージョン0チェックはFirst QRでのみ適用（Non-FirstフレームにはVersionフィールドがないため）
 			if (metadata.isFirst) {
 				if (metadata.version === 0) {
 					this.emitError({
@@ -512,7 +828,7 @@ export class TransportApi {
 					if (metadata.crcValid) {
 						return this.establishFirstQr(wireBytes, metadata);
 					} else {
-						// Corrupted First QR -> count CRC error
+						// 破損したFirst QR -> CRCエラーをカウント
 						this.handleCrcError();
 					}
 				}
@@ -569,6 +885,12 @@ export class TransportApi {
 		}
 	}
 
+	/**
+	 * First QR受信による通信確立処理
+	 *
+	 * @param wireBytes - ワイヤーフレームバイト配列
+	 * @param metadata - フレームメタデータ
+	 */
 	private establishFirstQr(wireBytes: Uint8Array, metadata: FrameMetadata): void | Promise<void> {
 		this.knownTotalQrCount = metadata.totalQrCount;
 		this.knownFirstFrameCrc = metadata.frameCrc;
@@ -583,6 +905,11 @@ export class TransportApi {
 		}
 	}
 
+	/**
+	 * 上書きされた保留フレームをクリア
+	 *
+	 * @param frameNumber - フレーム番号
+	 */
 	private removeSupersededPendingFrames(frameNumber: number): void | Promise<void> {
 		if (this.pendingPreFirstFrames.length === 0) return;
 		if (this.shouldUseWorker()) {
@@ -595,7 +922,7 @@ export class TransportApi {
 							nextPending.push(wire);
 						}
 					} catch {
-						// ignore invalid pending frame
+						// 無効な保留フレームは無視
 					}
 				}
 				this.pendingPreFirstFrames = nextPending;
@@ -612,20 +939,26 @@ export class TransportApi {
 		}
 	}
 
+	/**
+	 * First QR確立後の後続フレームを処理
+	 *
+	 * @param wireBytes - ワイヤーフレームバイト配列
+	 * @param metadata - フレームメタデータ
+	 */
 	private processPostFirstFrame(wireBytes: Uint8Array, metadata: FrameMetadata): void | Promise<void> {
 		if (!metadata.crcValid) {
 			this.handleCrcError();
 			return;
 		}
 
-		// CRC is VALID! Reset consecutive error count
+		// CRC正常時は連続エラーカウントをリセット
 		this.consecutiveCrcErrors = 0;
 
 		const continueProcessing = (): void | Promise<void> => {
 			const existingWire = this.storedFrames.get(metadata.frameNumber);
 			if (existingWire) {
 				const checkExistingAndProceed = (existingMeta?: FrameMetadata): void => {
-					// Spec v8 Section 38, 39, 60: If First QR (Frame 0) arrives with a different First CRC, update communication reference and discard subsequent frames!
+					// 仕様書v8 Section 38, 39, 60: First QR(Frame 0)が異なるFirst CRCで届いた場合、基準を更新し後続フレームを破棄
 					if (metadata.frameNumber === 0 && metadata.frameCrc !== this.knownFirstFrameCrc) {
 						for (const key of Array.from(this.storedFrames.keys())) {
 							if (key !== 0) {
@@ -645,7 +978,7 @@ export class TransportApi {
 					}
 
 					if (existingMeta && existingMeta.payloadBitLen === metadata.payloadBitLen) {
-						// Frame Number and Payload Length match existing -> Skip!
+						// フレーム番号とペイロード長が同一の場合はスキップ
 						return;
 					}
 
@@ -677,7 +1010,7 @@ export class TransportApi {
 				}
 			}
 
-			// New Frame arrival (CRC valid)
+			// 新規フレーム到着（CRC正常）
 			this.storedFrames.set(metadata.frameNumber, wireBytes);
 			this.totalReceivedPayloadBits += metadata.payloadBitLen;
 
@@ -688,7 +1021,7 @@ export class TransportApi {
 			this.checkCompletion();
 		};
 
-		// Spec v8 Section 35: Remove superseded pre-first queued items for this frame number
+		// 仕様書v8 Section 35: 到着したフレーム番号に対応する保留キュー項目を削除
 		const res = this.removeSupersededPendingFrames(metadata.frameNumber);
 		if (res instanceof Promise) {
 			return res.then(continueProcessing);
@@ -697,6 +1030,9 @@ export class TransportApi {
 		}
 	}
 
+	/**
+	 * CRCエラー発生時の内部カウント処理
+	 */
 	private handleCrcError(): void {
 		this.consecutiveCrcErrors += 1;
 		const maxErrors = this.config.transport.maxConsecutiveCrcErrors;
@@ -716,6 +1052,9 @@ export class TransportApi {
 		}
 	}
 
+	/**
+	 * First QR受信前の保留キューを一括処理
+	 */
 	private processPendingQueue(): void | Promise<void> {
 		if (this.pendingPreFirstFrames.length === 0) return;
 		const queue = [...this.pendingPreFirstFrames];
@@ -731,7 +1070,7 @@ export class TransportApi {
 						}
 						await this.processPostFirstFrame(wireBytes, metadata);
 					} catch {
-						// ignore invalid pending frame
+						// 無効な保留フレームは無視
 					}
 				}
 			})();
@@ -744,12 +1083,15 @@ export class TransportApi {
 					}
 					this.processPostFirstFrame(wireBytes, metadata);
 				} catch {
-					// ignore invalid pending frame
+					// 無効な保留フレームは無視
 				}
 			}
 		}
 	}
 
+	/**
+	 * 受信完了判定および全フレーム復元・検証処理
+	 */
 	private checkCompletion(): void {
 		if (this.knownTotalQrCount === undefined) return;
 

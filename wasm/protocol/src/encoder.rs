@@ -5,46 +5,64 @@ use crate::frame::{
 };
 use thiserror::Error;
 
-/// Current Library Format Version used by the sender.
+/// 送信側で使用される現行プロトコルバージョン
 pub const CURRENT_VERSION: u8 = 1;
 
-/// Input data type for the Sender API.
+/// Data API 送信側への入力データ型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputData<'a> {
+    /// バイトスライス参照
     Uint8Array(&'a [u8]),
+    /// 文字列スライス参照
     String(&'a str),
 }
 
-/// Errors that can occur during encoding in the Data API sender.
+/// Data API 送信側のエンコードエラー列挙型
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum EncoderError {
+    /// max_payload_bitsが0の場合のエラー
     #[error("max_payload_bits must be greater than 0")]
     ZeroMaxPayloadBits,
 
+    /// 最大許容フレーム数(65536)超過エラー
     #[error("Payload exceeds maximum supported frames (65536): {total_qr_count}")]
-    ExceedsMaxFrames { total_qr_count: u32 },
+    ExceedsMaxFrames {
+        /// 総QR数
+        total_qr_count: u32,
+    },
 
+    /// フレームエラー
     #[error("Frame error: {0}")]
     Frame(#[from] FrameError),
 
+    /// ビットストリームエラー
     #[error("BitStream error: {0}")]
     BitStream(#[from] BitStreamError),
 }
 
-/// Output returned by the Data API sender after encoding.
+/// Data API 送信側のエンコード出力構造体
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodeOutput {
+    /// 抽象フレーム配列
     pub frames: Vec<Frame>,
+    /// ワイヤー形式バイト配列群
     pub wire_bytes: Vec<Vec<u8>>,
 }
 
-/// Helper function to calculate parity frame count for a given intermediate data frame count and parity mode.
+/// 中間データフレーム数とパリティモードからパリティフレーム数を計算
+///
+/// # Arguments
+/// * `n_inter` - 中間データフレーム数
+/// * `parity_mode` - パリティモード
+///
+/// # Returns
+/// * 必要なパリティフレーム数
 pub fn calculate_parity_count(n_inter: usize, parity_mode: ParityMode) -> usize {
     if parity_mode == ParityMode::None || n_inter == 0 {
         return 0;
     }
-    let m = parity_mode.group_size(); // 8, 16, 32
-    let max_data_per_group = m - 1; // 7, 15, 31
+    let m = parity_mode.group_size();
+    let max_data_per_group = m - 1;
     let full_groups = n_inter / max_data_per_group;
     let rem = n_inter % max_data_per_group;
     if rem > 1 {
@@ -54,7 +72,17 @@ pub fn calculate_parity_count(n_inter: usize, parity_mode: ParityMode) -> usize 
     }
 }
 
-/// Encodes input data (Uint8Array or String) into a set of Frames and their wire format byte vectors.
+/// 入力データを複数ワイヤーフレームにエンコード
+///
+/// 入力データ (Uint8Array または String) を最大フレームビット長とパリティモードに従い、フレーム構造体群およびワイヤーバイト列にエンコードします。
+///
+/// # Arguments
+/// * `data` - 入力データ (InputData)
+/// * `max_frame_bits` - 1フレームあたりの最大ビット長
+/// * `parity_mode` - パリティモード
+///
+/// # Returns
+/// * エンコード結果 (EncodeOutput)
 pub fn encode_data(
     data: InputData,
     max_frame_bits: usize,
@@ -64,7 +92,7 @@ pub fn encode_data(
         return Err(EncoderError::ZeroMaxPayloadBits);
     }
 
-    // 1. Build Payload bitstream
+    // 1. ペイロードビットストリームの構築
     let mut payload_writer = BitWriter::new();
     let data_type = match data {
         InputData::Uint8Array(bytes) => {
@@ -74,13 +102,13 @@ pub fn encode_data(
         InputData::String(s) => {
             let is_ascii = s.bytes().all(|b| b <= 0x7F);
             if is_ascii {
-                // ASCII Mode: [Mode = 0 (1 bit)][7-bit MSB-first per character]
+                // ASCIIモード: [Mode = 0 (1ビット)][文字ごとに7ビット MSB-first]
                 payload_writer.write_bit(false);
                 for b in s.bytes() {
                     payload_writer.write_bits(b as u64, 7)?;
                 }
             } else {
-                // UTF-8 Mode: [Mode = 1 (1 bit)][8-bit MSB-first per byte]
+                // UTF-8モード: [Mode = 1 (1ビット)][バイトごとに8ビット MSB-first]
                 payload_writer.write_bit(true);
                 for b in s.bytes() {
                     payload_writer.write_bits(b as u64, 8)?;
@@ -143,17 +171,17 @@ pub fn encode_data(
         low
     };
 
-    // 2. Determine minimum Total QR Count N and intermediate count n_inter
-    let mut selected_config: Option<(u32, usize)> = None; // (total_qr_count, n_inter)
+    // 2. 最小総QR数 N および中間データフレーム数 n_inter の確定
+    let mut selected_config: Option<(u32, usize)> = None;
 
-    // Check single frame (N=1)
+    // 単一フレーム (N=1) の判定
     let single_cap = max_payload_for_frame(1, 0);
     if single_cap >= total_payload_bits {
         selected_config = Some((1, 0));
     } else {
         for n_inter in 0..=65536 {
             let n_parity = calculate_parity_count(n_inter, parity_mode);
-            let n_total = 1 + n_inter + n_parity + 1; // First + Intermediate + Parity + Final
+            let n_total = 1 + n_inter + n_parity + 1; // First + 中間 + パリティ + Final
 
             if n_total > 65536 {
                 break;
@@ -184,7 +212,7 @@ pub fn encode_data(
         total_qr_count: 65537,
     })?;
 
-    // 3. Split payload bitstream into data payload chunks.
+    // 3. ペイロードビットストリームの分割
     let mut payload_reader =
         BitReader::new_with_bit_len(payload_writer.as_bytes(), total_payload_bits)?;
 
@@ -201,7 +229,7 @@ pub fn encode_data(
         data_payload_chunks.push(chunk_writer.into_bytes());
         data_payload_lens.push(chunk_bits);
     } else {
-        let total_data_frames = 1 + n_inter + 1; // First + Intermediates + Final
+        let total_data_frames = 1 + n_inter + 1;
         for data_idx in 0..total_data_frames {
             let logical_fn = if data_idx == 0 {
                 0
@@ -225,7 +253,7 @@ pub fn encode_data(
         }
     }
 
-    // 4. Construct logical frames array
+    // 4. 論理フレーム構造体配列の生成
     let mut logical_frames: Vec<Frame> = Vec::with_capacity(total_qr_count as usize);
 
     if total_qr_count == 1 {
@@ -254,7 +282,7 @@ pub fn encode_data(
             overall_crc: None,
         });
 
-        // Intermediate & Parity frames
+        // 中間フレームおよびパリティフレーム
         let mut data_chunk_idx = 1;
 
         if parity_mode == ParityMode::None || n_inter == 0 {
@@ -271,8 +299,8 @@ pub fn encode_data(
                 data_chunk_idx += 1;
             }
         } else {
-            let m = parity_mode.group_size(); // 8, 16, 32
-            let max_data_per_group = m - 1; // 7, 15, 31
+            let m = parity_mode.group_size();
+            let max_data_per_group = m - 1;
 
             let mut current_fn = 1u32;
             let mut remaining_inter_data = n_inter;
@@ -302,7 +330,7 @@ pub fn encode_data(
 
                 remaining_inter_data -= group_data_count;
 
-                // Add Parity Frame if group has > 1 data frames
+                // データフレームが2つ以上の場合はパリティフレームを追加
                 if group_data_count > 1 {
                     let (parity_bytes, parity_bit_len) = xor_payloads(&group_payloads);
                     logical_frames.push(Frame::NonFirst {
@@ -332,7 +360,7 @@ pub fn encode_data(
         });
     }
 
-    // 5. Calculate Overall CRC over all DATA frames and assign to Final Frame
+    // 5. 全データフレームにまたがる全体CRCを計算し、Final Frameに割り当て
     let ov_crc = calculate_overall_crc(&logical_frames)?;
     let final_idx = (total_qr_count - 1) as usize;
     match &mut logical_frames[final_idx] {
@@ -340,7 +368,7 @@ pub fn encode_data(
         Frame::NonFirst { overall_crc, .. } => *overall_crc = Some(ov_crc),
     }
 
-    // 6. Encode logical frames to wire bytes and extract actual Frame CRCs
+    // 6. 各フレームをワイヤー形式にエンコードし、Frame CRCを取得
     let mut logical_wire_bytes: Vec<Vec<u8>> = Vec::with_capacity(total_qr_count as usize);
     let mut logical_decoded_frames: Vec<Frame> = Vec::with_capacity(total_qr_count as usize);
 
@@ -366,16 +394,15 @@ pub fn encode_data(
         logical_decoded_frames.push(decoded_i);
     }
 
-    // 7. Interleaving (Dispersal) for Parity Modes 8, 16, 32
+    // 7. パリティモード 8, 16, 32 のインターリーブ（分散処理）
     if parity_mode == ParityMode::None || total_qr_count <= 2 {
         Ok(EncodeOutput {
             frames: logical_decoded_frames,
             wire_bytes: logical_wire_bytes,
         })
     } else {
-        // Group intermediate frames (indices 1..total_qr_count-2) into parity groups
-        let m = parity_mode.group_size(); // 8, 16, 32
-        let max_data_per_group = m - 1; // 7, 15, 31
+        let m = parity_mode.group_size();
+        let max_data_per_group = m - 1;
         let inter_and_parity_end = (total_qr_count - 2) as usize;
 
         let mut groups: Vec<Vec<usize>> = Vec::new();
@@ -384,7 +411,6 @@ pub fn encode_data(
         while idx <= inter_and_parity_end {
             let remaining_slots = (inter_and_parity_end - idx) + 1;
             if remaining_slots <= 1 {
-                // 1 frame left in last group
                 groups.push(vec![idx]);
                 break;
             }
@@ -406,9 +432,9 @@ pub fn encode_data(
             groups.push(group);
         }
 
-        // Interleave round-robin across groups
+        // グループ間のラウンドロビンインターリーブ
         let mut interleaved_indices: Vec<usize> = Vec::with_capacity(total_qr_count as usize);
-        interleaved_indices.push(0); // First QR
+        interleaved_indices.push(0);
 
         let max_group_len = groups.iter().map(|g| g.len()).max().unwrap_or(0);
         for col in 0..max_group_len {
@@ -419,7 +445,7 @@ pub fn encode_data(
             }
         }
 
-        interleaved_indices.push((total_qr_count - 1) as usize); // Final QR
+        interleaved_indices.push((total_qr_count - 1) as usize);
 
         let mut emitted_frames = Vec::with_capacity(total_qr_count as usize);
         let mut emitted_wire = Vec::with_capacity(total_qr_count as usize);
@@ -493,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_uint8array_multi_byte_and_bit_splitting() {
-        let data = [0x12, 0x34, 0x56, 0x78]; // 32 bits
+        let data = [0x12, 0x34, 0x56, 0x78];
         let output = encode_data(InputData::Uint8Array(&data), 64, ParityMode::None).unwrap();
         assert_eq!(output.frames.len(), 3);
 
@@ -626,7 +652,7 @@ mod tests {
 
     #[test]
     fn test_frame_splitting_boundaries() {
-        let data = [0xAA; 10]; // 80 bits
+        let data = [0xAA; 10];
 
         let out_exact = encode_data(InputData::Uint8Array(&data), 80, ParityMode::None).unwrap();
         assert_eq!(out_exact.frames.len(), 3);

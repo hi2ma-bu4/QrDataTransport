@@ -3,17 +3,28 @@ use crate::crc::crc16;
 use crate::varint::{VarintError, read_varint, write_varint};
 use thiserror::Error;
 
-/// Parity Mode (3 bits) as specified in modified First QR format
+/// パリティモード列挙型 (3ビット)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ParityMode {
+    /// なし
     None = 0,
+    /// グループ 8
     Group8 = 8,
+    /// グループ 16
     Group16 = 16,
+    /// グループ 32
     Group32 = 32,
 }
 
 impl ParityMode {
+    /// u8値からParityModeを生成
+    ///
+    /// # Arguments
+    /// * `value` - 対象のu8値
+    ///
+    /// # Returns
+    /// * 成功時は `Ok(ParityMode)`
     pub fn from_u8(value: u8) -> Result<Self, FrameError> {
         match value {
             0 => Ok(ParityMode::None),
@@ -24,6 +35,10 @@ impl ParityMode {
         }
     }
 
+    /// ワイヤービット表現に変換
+    ///
+    /// # Returns
+    /// * 3ビットのワイヤー値
     pub fn to_wire_bits(self) -> u8 {
         match self {
             ParityMode::None => 0b000,
@@ -33,6 +48,10 @@ impl ParityMode {
         }
     }
 
+    /// グループサイズを取得
+    ///
+    /// # Returns
+    /// * グループサイズ数値
     pub fn group_size(self) -> usize {
         match self {
             ParityMode::None => 0,
@@ -43,15 +62,24 @@ impl ParityMode {
     }
 }
 
-/// Data Type (2 bits) as specified in Spec Section 15
+/// データ型列挙型 (2ビット)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DataType {
+    /// バイト配列
     Uint8Array = 0b00,
+    /// 文字列
     String = 0b01,
 }
 
 impl DataType {
+    /// u8値からDataTypeを生成
+    ///
+    /// # Arguments
+    /// * `value` - 対象のu8値
+    ///
+    /// # Returns
+    /// * 成功時は `Ok(DataType)`
     pub fn from_u8(value: u8) -> Result<Self, FrameError> {
         match value {
             0b00 => Ok(DataType::Uint8Array),
@@ -61,95 +89,148 @@ impl DataType {
     }
 }
 
-/// Errors that can occur during Frame encoding or decoding.
+/// フレーム処理エラー列挙型
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FrameError {
+    /// ビットストリームエラー
     #[error("BitStream error: {0}")]
     BitStream(#[from] BitStreamError),
 
+    /// Varintエラー
     #[error("Varint error: {0}")]
     Varint(#[from] VarintError),
 
+    /// 無効なライブラリフォーマットバージョン
     #[error("Invalid Library Format Version: {0}")]
     InvalidVersion(u8),
 
+    /// 無効なパリティモード
     #[error("Invalid Parity Mode: {0:#05b}")]
     InvalidParityMode(u8),
 
+    /// 無効なデータ型
     #[error("Invalid Data Type: {0}")]
     InvalidDataType(u8),
 
+    /// 無効なフレーム番号
     #[error("Invalid Frame Number {frame_number} for Total QR Count {total_qr_count}")]
     InvalidFrameNumber {
+        /// フレーム番号
         frame_number: u32,
+        /// 総QR数
         total_qr_count: u32,
     },
 
+    /// 無効な総QR数
     #[error("Invalid Total QR Count: {0}")]
     InvalidTotalQrCount(u32),
 
+    /// 0でないパディングビットを検出
     #[error("Non-zero padding bit detected")]
     InvalidPadding,
 
+    /// フレームCRCの不一致
     #[error(
         "Frame CRC mismatch: wire CRC = {wire_crc:#06x}, calculated CRC = {calculated_crc:#06x}"
     )]
-    FrameCrcMismatch { wire_crc: u16, calculated_crc: u16 },
+    FrameCrcMismatch {
+        /// ワイヤーCRC
+        wire_crc: u16,
+        /// 計算CRC
+        calculated_crc: u16,
+    },
 
+    /// DecodeContext不足エラー
     #[error("Missing DecodeContext for Non-First Frame decoding")]
     MissingContext,
 
+    /// 全体CRC不足エラー
     #[error("Missing Overall CRC for Final Frame encoding")]
     MissingOverallCrc,
 
+    /// 無効なペイロード長
     #[error(
         "Invalid Payload Length: specified bit len {specified} exceeds byte buffer bits {buffer_bits}"
     )]
     InvalidPayloadLength {
+        /// 指定ビット長
         specified: usize,
+        /// バッファビット長
         buffer_bits: usize,
     },
 
+    /// 空のフレーム集合エラー
     #[error("Frame set is empty")]
     EmptyFrames,
 
+    /// 不完全なフレーム集合エラー
     #[error("Incomplete frame set: expected {expected} frames, got {actual}")]
-    IncompleteFrameSet { expected: u32, actual: usize },
+    IncompleteFrameSet {
+        /// 期待フレーム数
+        expected: u32,
+        /// 実際フレーム数
+        actual: usize,
+    },
 
+    /// 重複フレーム番号エラー
     #[error("Duplicate frame number {0}")]
     DuplicateFrameNumber(u32),
 
+    /// 不足フレーム番号エラー
     #[error("Missing frame number {0}")]
     MissingFrameNumber(u32),
 
+    /// 総QR数の不一致エラー
     #[error("Mismatched Total QR Count in frame set: expected {expected}, got {actual}")]
-    MismatchedTotalQrCount { expected: u32, actual: u32 },
+    MismatchedTotalQrCount {
+        /// 期待総QR数
+        expected: u32,
+        /// 実際総QR数
+        actual: u32,
+    },
 }
 
-/// Context passed when decoding a Non-First Frame.
+/// Non-First Frameデコード用コンテキスト構造体
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DecodeContext {
+    /// 既知の総QR数
     pub total_qr_count: Option<u32>,
+    /// 既知のFirstフレームCRC
     pub first_frame_crc: Option<u16>,
+    /// 既知のパリティモード
     pub parity_mode: Option<ParityMode>,
 }
 
-/// Lightweight metadata extracted from a Frame header without full body or CRC validation.
+/// フレームヘッダーメタデータ構造体
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameMetadata {
+    /// スタートビット
     pub start_bit: bool,
+    /// First QRフラグ
     pub is_first: bool,
+    /// パリティフレームフラグ
     pub is_parity: bool,
+    /// ライブラリフォーマットバージョン
     pub version: Option<u8>,
+    /// 総QR数
     pub total_qr_count: Option<u32>,
+    /// フレーム番号
     pub frame_number: u32,
+    /// パリティモード
     pub parity_mode: Option<ParityMode>,
+    /// データ型
     pub data_type: Option<DataType>,
+    /// ペイロードビット長
     pub payload_bit_len: usize,
+    /// ヘッダービット長
     pub header_bit_len: usize,
 }
 
 impl FrameMetadata {
+    /// 最終フレームかどうかを判定
+    ///
+    /// # Returns
+    /// * 最終フレームの場合はtrue
     pub fn is_final(&self) -> bool {
         if let Some(total) = self.total_qr_count {
             self.frame_number == total.saturating_sub(1)
@@ -159,7 +240,15 @@ impl FrameMetadata {
     }
 }
 
-/// Determines whether a frame number corresponds to a Parity Frame given total_qr_count and parity_mode.
+/// 対象フレーム番号がパリティフレームかどうかを判定
+///
+/// # Arguments
+/// * `frame_number` - フレーム番号
+/// * `total_qr_count` - 総QR数
+/// * `parity_mode` - パリティモード
+///
+/// # Returns
+/// * パリティフレームの場合はtrue
 pub fn is_parity_frame_number(
     frame_number: u32,
     total_qr_count: u32,
@@ -169,7 +258,7 @@ pub fn is_parity_frame_number(
         return false;
     }
 
-    let m = parity_mode.group_size() as u32; // 8, 16, 32
+    let m = parity_mode.group_size() as u32;
     let g = (frame_number - 1) / m + 1;
     let s_g = (g - 1) * m + 1;
 
@@ -189,7 +278,15 @@ pub fn is_parity_frame_number(
     }
 }
 
-/// Parses the header metadata from a raw byte slice bitstream.
+/// 生ビットストリームからヘッダーメタデータを解析
+///
+/// # Arguments
+/// * `data` - バイトスライス
+/// * `known_total_qr_count` - 既知の総QR数
+/// * `known_parity_mode` - 既知のパリティモード
+///
+/// # Returns
+/// * 解析されたFrameMetadata
 pub fn parse_frame_metadata(
     data: &[u8],
     known_total_qr_count: Option<u32>,
@@ -197,34 +294,26 @@ pub fn parse_frame_metadata(
 ) -> Result<FrameMetadata, FrameError> {
     let mut reader = BitReader::new(data);
 
-    // 11. Start Bit
     let start_bit = reader.read_bit()?;
 
     if start_bit {
-        // First QR
-        // 12. Library Format Version (4 bits)
         let version = reader.read_bits(4)? as u8;
         if version == 0 {
             return Err(FrameError::InvalidVersion(0));
         }
 
-        // 13. StoredTotalQRCount (16 bits)
         let stored_total_qr_count = reader.read_bits(16)? as u16;
         let total_qr_count = stored_total_qr_count as u32 + 1;
 
-        // 14. Frame Number
         let frame_bits = calculate_frame_bits(total_qr_count);
         let frame_number = reader.read_bits(frame_bits)? as u32;
 
-        // Parity Mode (3 bits)
         let parity_mode_raw = reader.read_bits(3)? as u8;
         let parity_mode = ParityMode::from_u8(parity_mode_raw)?;
 
-        // 15. Data Type (2 bits)
         let data_type_raw = reader.read_bits(2)? as u8;
         let data_type = DataType::from_u8(data_type_raw)?;
 
-        // 16. Payload Length (Varint)
         let payload_bit_len = read_varint(&mut reader)? as usize;
         let header_bit_len = reader.bit_pos();
 
@@ -243,21 +332,18 @@ pub fn parse_frame_metadata(
             header_bit_len,
         })
     } else {
-        // Non-First QR
         let total_qr_count = known_total_qr_count.ok_or(FrameError::MissingContext)?;
 
         if total_qr_count < 1 || total_qr_count > 65536 {
             return Err(FrameError::InvalidTotalQrCount(total_qr_count));
         }
 
-        // 14. Frame Number
         let frame_bits = calculate_frame_bits(total_qr_count);
         let frame_number = reader.read_bits(frame_bits)? as u32;
 
         let mode = known_parity_mode.unwrap_or(ParityMode::None);
         let is_parity = is_parity_frame_number(frame_number, total_qr_count, mode);
 
-        // 16. Payload Length (Varint)
         let payload_bit_len = read_varint(&mut reader)? as usize;
         let header_bit_len = reader.bit_pos();
 
@@ -276,32 +362,54 @@ pub fn parse_frame_metadata(
     }
 }
 
-/// Representation of a parsed or constructed Frame.
+/// フレーム抽象構造表現
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
+    /// First QRフレーム
     First {
+        /// バージョン
         version: u8,
+        /// 総QR数
         total_qr_count: u32,
+        /// フレーム番号
         frame_number: u32,
+        /// パリティモード
         parity_mode: ParityMode,
+        /// データ型
         data_type: DataType,
+        /// ペイロードバイト配列
         payload_bytes: Vec<u8>,
+        /// ペイロードビット長
         payload_bit_len: usize,
+        /// フレームCRC
         frame_crc: u16,
+        /// 全体CRC
         overall_crc: Option<u32>,
     },
+    /// Non-First QRフレーム
     NonFirst {
+        /// 総QR数
         total_qr_count: u32,
+        /// フレーム番号
         frame_number: u32,
+        /// パリティフレームフラグ
         is_parity: bool,
+        /// ペイロードバイト配列
         payload_bytes: Vec<u8>,
+        /// ペイロードビット長
         payload_bit_len: usize,
+        /// フレームCRC
         frame_crc: u16,
+        /// 全体CRC
         overall_crc: Option<u32>,
     },
 }
 
 impl Frame {
+    /// 総QR数を取得
+    ///
+    /// # Returns
+    /// * 総QR数
     pub fn total_qr_count(&self) -> u32 {
         match self {
             Frame::First { total_qr_count, .. } => *total_qr_count,
@@ -309,6 +417,10 @@ impl Frame {
         }
     }
 
+    /// フレーム番号を取得
+    ///
+    /// # Returns
+    /// * フレーム番号
     pub fn frame_number(&self) -> u32 {
         match self {
             Frame::First { frame_number, .. } => *frame_number,
@@ -316,6 +428,10 @@ impl Frame {
         }
     }
 
+    /// フレームCRCを取得
+    ///
+    /// # Returns
+    /// * 16ビットフレームCRC
     pub fn frame_crc(&self) -> u16 {
         match self {
             Frame::First { frame_crc, .. } => *frame_crc,
@@ -323,6 +439,10 @@ impl Frame {
         }
     }
 
+    /// 全体CRCを取得
+    ///
+    /// # Returns
+    /// * オプションの32ビット全体CRC
     pub fn overall_crc(&self) -> Option<u32> {
         match self {
             Frame::First { overall_crc, .. } => *overall_crc,
@@ -330,6 +450,10 @@ impl Frame {
         }
     }
 
+    /// パリティモードを取得
+    ///
+    /// # Returns
+    /// * オプションのParityMode
     pub fn parity_mode(&self) -> Option<ParityMode> {
         match self {
             Frame::First { parity_mode, .. } => Some(*parity_mode),
@@ -337,6 +461,10 @@ impl Frame {
         }
     }
 
+    /// パリティフレームかどうかを取得
+    ///
+    /// # Returns
+    /// * パリティフレームの場合はtrue
     pub fn is_parity(&self) -> bool {
         match self {
             Frame::First { .. } => false,
@@ -344,10 +472,18 @@ impl Frame {
         }
     }
 
+    /// 最終フレームかどうかを取得
+    ///
+    /// # Returns
+    /// * 最終フレームの場合はtrue
     pub fn is_final(&self) -> bool {
         self.frame_number() == self.total_qr_count() - 1
     }
 
+    /// ペイロードバイト参照を取得
+    ///
+    /// # Returns
+    /// * ペイロードバイトスライス
     pub fn payload_bytes(&self) -> &[u8] {
         match self {
             Frame::First { payload_bytes, .. } => payload_bytes,
@@ -355,6 +491,10 @@ impl Frame {
         }
     }
 
+    /// ペイロードビット長を取得
+    ///
+    /// # Returns
+    /// * ペイロードビット長
     pub fn payload_bit_len(&self) -> usize {
         match self {
             Frame::First {
@@ -367,8 +507,15 @@ impl Frame {
     }
 }
 
-/// Calculates FrameBits from Total QR Count (N).
-/// Spec Section 13 & 77: FrameBits = max(1, ceil(log2(N)))
+/// 総QR数からFrameBits長を算出
+///
+/// 仕様書 Section 13 & 77: FrameBits = max(1, ceil(log2(N)))
+///
+/// # Arguments
+/// * `total_qr_count` - 総QR数
+///
+/// # Returns
+/// * FrameBits長
 pub fn calculate_frame_bits(total_qr_count: u32) -> usize {
     if total_qr_count <= 1 {
         1
@@ -377,7 +524,14 @@ pub fn calculate_frame_bits(total_qr_count: u32) -> usize {
     }
 }
 
-/// Encodes a Frame into a bitstream byte vector.
+/// フレーム構造体をワイヤーバイト列にエンコード
+///
+/// # Arguments
+/// * `frame` - 対象フレーム
+/// * `first_frame_crc_opt` - FirstフレームCRC (Non-Firstエンコード時に必要)
+///
+/// # Returns
+/// * エンコードされたワイヤーバイト配列
 pub fn encode_frame(
     frame: &Frame,
     first_frame_crc_opt: Option<u16>,
@@ -426,32 +580,17 @@ pub fn encode_frame(
                 });
             }
 
-            // 11. Start Bit = 1
             writer.write_bit(true);
-
-            // 12. Library Format Version (4 bits)
             writer.write_bits(*version as u64, 4)?;
 
-            // 13. StoredTotalQRCount (16 bits)
             let stored_total_qr_count = (total_qr_count - 1) as u16;
             writer.write_bits(stored_total_qr_count as u64, 16)?;
-
-            // 14. Frame Number (FrameBits bits)
             writer.write_bits(frame_number as u64, frame_bits)?;
-
-            // Parity Mode (3 bits)
             writer.write_bits(parity_mode.to_wire_bits() as u64, 3)?;
-
-            // 15. Data Type (2 bits)
             writer.write_bits(*data_type as u64, 2)?;
-
-            // 16. Payload Length (Varint)
             write_varint(&mut writer, payload_bit_len as u64)?;
-
-            // 17. Payload
             writer.write_bytes(payload_bytes, payload_bit_len)?;
 
-            // 18. Padding (0-bits to align to byte boundary)
             let rem = writer.bit_len() % 8;
             if rem > 0 {
                 let padding_bits = 8 - rem;
@@ -460,11 +599,9 @@ pub fn encode_frame(
                 }
             }
 
-            // 21. Frame CRC (16 bits) calculated over [Header][Payload][Padding]
             let calculated_crc = crc16(writer.as_bytes());
             writer.write_bits(calculated_crc as u64, 16)?;
 
-            // 20 & 26. Overall Checksum if Final
             if frame.is_final() {
                 let ov_crc = overall_crc.ok_or(FrameError::MissingOverallCrc)?;
                 writer.write_bits(ov_crc as u64, 32)?;
@@ -480,19 +617,11 @@ pub fn encode_frame(
 
             let first_crc = first_frame_crc_opt.ok_or(FrameError::MissingContext)?;
 
-            // 11. Start Bit = 0
             writer.write_bit(false);
-
-            // 14. Frame Number (FrameBits bits)
             writer.write_bits(frame_number as u64, frame_bits)?;
-
-            // 16. Payload Length (Varint)
             write_varint(&mut writer, payload_bit_len as u64)?;
-
-            // 17. Payload
             writer.write_bytes(payload_bytes, payload_bit_len)?;
 
-            // 18. Padding (0-bits to align to byte boundary)
             let rem = writer.bit_len() % 8;
             if rem > 0 {
                 let padding_bits = 8 - rem;
@@ -501,14 +630,12 @@ pub fn encode_frame(
                 }
             }
 
-            // 23. Frame CRC for Non-First: [Current Frame Bytes] + [First Frame CRC 2 bytes]
             let mut crc_input = Vec::from(writer.as_bytes());
             crc_input.extend_from_slice(&first_crc.to_be_bytes());
             let calculated_crc = crc16(&crc_input);
 
             writer.write_bits(calculated_crc as u64, 16)?;
 
-            // 20 & 26. Overall Checksum if Final
             if frame.is_final() {
                 let ov_crc = overall_crc.ok_or(FrameError::MissingOverallCrc)?;
                 writer.write_bits(ov_crc as u64, 32)?;
@@ -519,7 +646,14 @@ pub fn encode_frame(
     Ok(writer.into_bytes())
 }
 
-/// Decodes a Frame from a raw byte slice bitstream.
+/// ワイヤーバイト列からFrameを復元・デコード
+///
+/// # Arguments
+/// * `data` - ワイヤーバイト配列
+/// * `context` - デコードコンテキスト
+///
+/// # Returns
+/// * デコードされたFrame構造体
 pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Frame, FrameError> {
     let known_total = context.and_then(|c| c.total_qr_count);
     let known_mode = context.and_then(|c| c.parity_mode);
@@ -563,7 +697,6 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
             }));
         }
 
-        // 17. Read Payload
         let mut payload_writer = BitWriter::with_capacity_bits(payload_bit_len);
         for _ in 0..payload_bit_len {
             let bit = reader.read_bit()?;
@@ -571,7 +704,6 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
         }
         let payload_bytes = payload_writer.into_bytes();
 
-        // 18. Read Padding and verify all 0
         for _ in 0..padding_bits {
             let p = reader.read_bit()?;
             if p {
@@ -581,17 +713,14 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
 
         let frame_data_byte_len = reader.bit_pos() / 8;
 
-        // 20. Read Frame CRC (16 bits)
         let wire_crc = reader.read_bits(16)? as u16;
 
-        // 26. Read Overall CRC if Final
         let overall_crc = if is_final {
             Some(reader.read_bits(32)? as u32)
         } else {
             None
         };
 
-        // 21. Validate Frame CRC
         let calculated_crc = crc16(&data[..frame_data_byte_len]);
         if wire_crc != calculated_crc {
             return Err(FrameError::FrameCrcMismatch {
@@ -644,7 +773,6 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
             }));
         }
 
-        // 17. Read Payload
         let mut payload_writer = BitWriter::with_capacity_bits(payload_bit_len);
         for _ in 0..payload_bit_len {
             let bit = reader.read_bit()?;
@@ -652,7 +780,6 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
         }
         let payload_bytes = payload_writer.into_bytes();
 
-        // 18. Read Padding and verify all 0
         for _ in 0..padding_bits {
             let p = reader.read_bit()?;
             if p {
@@ -662,17 +789,14 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
 
         let frame_data_byte_len = reader.bit_pos() / 8;
 
-        // 20. Read Frame CRC (16 bits)
         let wire_crc = reader.read_bits(16)? as u16;
 
-        // 26. Read Overall CRC if Final
         let overall_crc = if is_final {
             Some(reader.read_bits(32)? as u32)
         } else {
             None
         };
 
-        // 23. Validate Frame CRC for Non-First Frame
         let mut crc_input = Vec::from(&data[..frame_data_byte_len]);
         crc_input.extend_from_slice(&first_frame_crc.to_be_bytes());
         let calculated_crc = crc16(&crc_input);
@@ -696,8 +820,13 @@ pub fn decode_frame(data: &[u8], context: Option<&DecodeContext>) -> Result<Fram
     }
 }
 
-/// Helper function to perform XOR across multiple payload slices.
-/// Zero-pads shorter payloads to match the max bit length.
+/// 複数のペイロード間のXOR演算を計算
+///
+/// # Arguments
+/// * `payloads` - ペイロードバイト列とビット長のタプルスライス
+///
+/// # Returns
+/// * XOR結果のバイトベクターと最大ビット長
 pub fn xor_payloads(payloads: &[(&[u8], usize)]) -> (Vec<u8>, usize) {
     if payloads.is_empty() {
         return (vec![], 0);
@@ -724,7 +853,13 @@ pub fn xor_payloads(payloads: &[(&[u8], usize)]) -> (Vec<u8>, usize) {
     (result, max_bit_len)
 }
 
-/// Concatenates the payloads of a complete set of Data Frames in frame_number order (excluding Parity frames).
+/// データフレームのペイロードビット列を結合
+///
+/// # Arguments
+/// * `frames` - 完全なフレームリスト
+///
+/// # Returns
+/// * 結合されたビットストリームWriter
 pub fn concat_data_payload_bits(frames: &[Frame]) -> Result<BitWriter, FrameError> {
     if frames.is_empty() {
         return Err(FrameError::EmptyFrames);
@@ -791,13 +926,25 @@ pub fn concat_data_payload_bits(frames: &[Frame]) -> Result<BitWriter, FrameErro
     Ok(writer)
 }
 
-/// Calculates the Overall CRC (CRC-32/ISO-HDLC) across all data payloads in a Frame set.
+/// フレーム集合全体のChecksum (CRC32) を計算
+///
+/// # Arguments
+/// * `frames` - フレームリスト
+///
+/// # Returns
+/// * 32ビットChecksum
 pub fn calculate_overall_crc(frames: &[Frame]) -> Result<u32, FrameError> {
     let writer = concat_data_payload_bits(frames)?;
     Ok(crate::crc::crc32_bits(writer.as_bytes(), writer.bit_len()))
 }
 
-/// Verifies that the calculated Overall CRC matches the Overall CRC stored in the Final QR.
+/// 全体CRC検証
+///
+/// # Arguments
+/// * `frames` - フレームリスト
+///
+/// # Returns
+/// * 検証一致時はtrue
 pub fn verify_overall_crc(frames: &[Frame]) -> Result<bool, FrameError> {
     let calculated = calculate_overall_crc(frames)?;
 

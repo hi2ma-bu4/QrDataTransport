@@ -1,27 +1,54 @@
 use thiserror::Error;
 
+/// ビットストリーム操作エラー列挙型
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BitStreamError {
+    /// データ読み込み時のUnexpectedEofエラー
     #[error("Attempted to read {requested} bits, but only {remaining} bits remain")]
-    UnexpectedEof { requested: usize, remaining: usize },
+    UnexpectedEof {
+        /// 要求ビット数
+        requested: usize,
+        /// 残りビット数
+        remaining: usize,
+    },
 
+    /// サポート範囲外のビット数指定エラー
     #[error("Bit count {0} exceeds maximum supported bit count (64)")]
     InvalidBitCount(usize),
 
+    /// 値のオーバーフローエラー
     #[error("Value {value} exceeds maximum value for {num_bits} bits")]
-    ValueOverflow { value: u64, num_bits: usize },
+    ValueOverflow {
+        /// 設定値
+        value: u64,
+        /// ビット幅
+        num_bits: usize,
+    },
 
+    /// 範囲外オフセット指定エラー
     #[error("Bit offset {offset} is out of bounds for data of bit length {bit_len}")]
-    OutOfBounds { offset: usize, bit_len: usize },
+    OutOfBounds {
+        /// オフセット
+        offset: usize,
+        /// ビット長
+        bit_len: usize,
+    },
 }
 
+/// ビット単位書き込み用ライター構造体
 #[derive(Debug, Clone, Default)]
 pub struct BitWriter {
+    /// 内部バッファ配列
     bytes: Vec<u8>,
+    /// 書き込み済みビット長
     bit_len: usize,
 }
 
 impl BitWriter {
+    /// BitWriterインスタンスを生成
+    ///
+    /// # Returns
+    /// * 空のBitWriterインスタンス
     pub fn new() -> Self {
         Self {
             bytes: Vec::new(),
@@ -29,6 +56,13 @@ impl BitWriter {
         }
     }
 
+    /// 容量指定でBitWriterインスタンスを生成
+    ///
+    /// # Arguments
+    /// * `capacity_bits` - 確保するビット容量
+    ///
+    /// # Returns
+    /// * BitWriterインスタンス
     pub fn with_capacity_bits(capacity_bits: usize) -> Self {
         let capacity_bytes = (capacity_bits + 7) / 8;
         Self {
@@ -37,18 +71,34 @@ impl BitWriter {
         }
     }
 
+    /// 書き込み済みビット長を取得
+    ///
+    /// # Returns
+    /// * 現在のビット長
     pub fn bit_len(&self) -> usize {
         self.bit_len
     }
 
+    /// バイトスライスを取得
+    ///
+    /// # Returns
+    /// * 内部バッファの参照
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
+    /// 内部バッファの所有権を取得
+    ///
+    /// # Returns
+    /// * 内部バッファのVec<u8>
     pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
 
+    /// 1ビット書き込み
+    ///
+    /// # Arguments
+    /// * `bit` - 書き込む真偽値
     pub fn write_bit(&mut self, bit: bool) {
         let byte_idx = self.bit_len / 8;
         let bit_offset = 7 - (self.bit_len % 8);
@@ -66,6 +116,14 @@ impl BitWriter {
         self.bit_len += 1;
     }
 
+    /// 複数ビット書き込み
+    ///
+    /// # Arguments
+    /// * `value` - 書き込む値
+    /// * `num_bits` - ビット数 (1 ~ 64)
+    ///
+    /// # Returns
+    /// * 成功時は `Ok(())`
     pub fn write_bits(&mut self, value: u64, num_bits: usize) -> Result<(), BitStreamError> {
         if num_bits > 64 {
             return Err(BitStreamError::InvalidBitCount(num_bits));
@@ -82,6 +140,14 @@ impl BitWriter {
         Ok(())
     }
 
+    /// バイト配列の指定ビット数を書き込み
+    ///
+    /// # Arguments
+    /// * `bytes` - ソースバイトスライス
+    /// * `num_bits` - 書き込むビット数
+    ///
+    /// # Returns
+    /// * 成功時は `Ok(())`
     pub fn write_bytes(&mut self, bytes: &[u8], num_bits: usize) -> Result<(), BitStreamError> {
         if num_bits > bytes.len() * 8 {
             return Err(BitStreamError::UnexpectedEof {
@@ -108,14 +174,25 @@ impl BitWriter {
     }
 }
 
+/// ビット単位読み込み用リーダー構造体
 #[derive(Debug, Clone, Copy)]
 pub struct BitReader<'a> {
+    /// ソースバイトデータスライス
     data: &'a [u8],
+    /// 対象ビット長
     bit_len: usize,
+    /// 現在の読み込みビット位置
     bit_pos: usize,
 }
 
 impl<'a> BitReader<'a> {
+    /// BitReaderインスタンスを生成
+    ///
+    /// # Arguments
+    /// * `data` - 読み込み元バイトデータスライス
+    ///
+    /// # Returns
+    /// * BitReaderインスタンス
     pub fn new(data: &'a [u8]) -> Self {
         Self {
             data,
@@ -124,6 +201,14 @@ impl<'a> BitReader<'a> {
         }
     }
 
+    /// ビット長指定でBitReaderインスタンスを生成
+    ///
+    /// # Arguments
+    /// * `data` - 読み込み元バイトデータスライス
+    /// * `bit_len` - 対象ビット長
+    ///
+    /// # Returns
+    /// * BitReaderインスタンス
     pub fn new_with_bit_len(data: &'a [u8], bit_len: usize) -> Result<Self, BitStreamError> {
         if bit_len > data.len() * 8 {
             return Err(BitStreamError::OutOfBounds {
@@ -138,18 +223,34 @@ impl<'a> BitReader<'a> {
         })
     }
 
+    /// 全体ビット長を取得
+    ///
+    /// # Returns
+    /// * 全体ビット長
     pub fn bit_len(&self) -> usize {
         self.bit_len
     }
 
+    /// 現在のビット位置を取得
+    ///
+    /// # Returns
+    /// * ビット位置
     pub fn bit_pos(&self) -> usize {
         self.bit_pos
     }
 
+    /// 未読み込みの残りビット数を取得
+    ///
+    /// # Returns
+    /// * 残りビット数
     pub fn remaining_bits(&self) -> usize {
         self.bit_len.saturating_sub(self.bit_pos)
     }
 
+    /// 1ビット読み込み
+    ///
+    /// # Returns
+    /// * 読み込んだ真偽値
     pub fn read_bit(&mut self) -> Result<bool, BitStreamError> {
         if self.bit_pos >= self.bit_len {
             return Err(BitStreamError::UnexpectedEof {
@@ -166,6 +267,13 @@ impl<'a> BitReader<'a> {
         Ok(bit)
     }
 
+    /// 複数ビット読み込み
+    ///
+    /// # Arguments
+    /// * `num_bits` - 読み込み対象ビット数 (1 ~ 64)
+    ///
+    /// # Returns
+    /// * 読み込まれたu64値
     pub fn read_bits(&mut self, num_bits: usize) -> Result<u64, BitStreamError> {
         if num_bits > 64 {
             return Err(BitStreamError::InvalidBitCount(num_bits));
@@ -194,7 +302,6 @@ mod tests {
     #[test]
     fn test_msb_first_byte_format() {
         let mut writer = BitWriter::new();
-        // 0x96 = 0b10010110
         writer.write_bits(0x96, 8).unwrap();
         assert_eq!(writer.as_bytes(), &[0x96]);
 
@@ -212,17 +319,11 @@ mod tests {
     #[test]
     fn test_unaligned_field_boundaries_4_3_8() {
         let mut writer = BitWriter::new();
-        // 4 bits: 0b1010 (10)
-        // 3 bits: 0b101 (5)
-        // 8 bits: 0b11001100 (204)
         writer.write_bits(10, 4).unwrap();
         writer.write_bits(5, 3).unwrap();
         writer.write_bits(204, 8).unwrap();
 
         assert_eq!(writer.bit_len(), 15);
-        // Bit stream: 1010 101 1 1001100
-        // Byte 0: 1010 101 1 = 0xAB
-        // Byte 1: 10011000 = 0x98 (when 0-padded)
         assert_eq!(writer.as_bytes(), &[0xAB, 0x98]);
 
         let mut reader = BitReader::new_with_bit_len(writer.as_bytes(), 15).unwrap();
@@ -290,7 +391,6 @@ mod tests {
     #[test]
     fn test_value_overflow_error() {
         let mut writer = BitWriter::new();
-        // 16 value in 4 bits (max 15)
         let err = writer.write_bits(16, 4).unwrap_err();
         assert_eq!(
             err,
@@ -305,7 +405,6 @@ mod tests {
     fn test_write_bytes_partial() {
         let mut writer = BitWriter::new();
         let source = [0b11010000, 0b10101111];
-        // Take 12 bits from source: top 8 bits of byte 0, top 4 bits of byte 1 -> 11010000 1010
         writer.write_bytes(&source, 12).unwrap();
         assert_eq!(writer.bit_len(), 12);
 
@@ -316,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_read_out_of_bounds_error() {
-        let data = [0xAA]; // 8 bits
+        let data = [0xAA];
         let mut reader = BitReader::new(&data);
         assert_eq!(reader.read_bits(4).unwrap(), 10);
         let err = reader.read_bits(8).unwrap_err();

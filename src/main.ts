@@ -1,3 +1,9 @@
+/**
+ * メインエントリーポイント
+ *
+ * エクスポート定義の集約
+ */
+
 export { protocol } from "./wasm/protocol";
 
 export { BrowserRuntimeApi, type CameraOptions, type RenderQrOptions, type RuntimeApi } from "./api/browserRuntimeApi";
