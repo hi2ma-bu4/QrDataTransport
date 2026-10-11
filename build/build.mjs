@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,6 +7,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const srcDir = resolve(root, "src");
 const wasmDir = resolve(srcDir, "wasm");
 const distDir = resolve(root, "dist");
+
+const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 
 await rm(distDir, { recursive: true, force: true });
 await mkdir(distDir, { recursive: true });
@@ -23,6 +25,9 @@ await build({
 	minify: false,
 	legalComments: "eof",
 	external: ["node:fs/promises"],
+	define: {
+		__QRDT_VERSION__: JSON.stringify(packageJson.version),
+	},
 });
 
 const wasmFiles = ["protocol.core.wasm", "protocol.core2.wasm"];

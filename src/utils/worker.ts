@@ -1,6 +1,6 @@
 import { DataApi } from "../api/dataApi";
 
-export type WorkerRequestType = "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage";
+export type WorkerRequestType = "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage" | "__QRDT_WORKER_PING__" | "__QRDT_WORKER_READY__";
 
 export interface WorkerRequestMessage {
 	id: string;
@@ -181,6 +181,9 @@ export class WorkerClient {
 	private failed = false;
 	private sequence = 0;
 
+	private workerReadyResolver: (() => void) | null = null;
+	private workerReadyWorker: WorkerLike | null = null;
+
 	private readonly pending = new Map<string, PendingTask>();
 	private readonly enabled: boolean;
 	private readonly fallback: boolean;
@@ -215,8 +218,8 @@ export class WorkerClient {
 			throw new Error("Worker is unavailable.");
 		}
 
-		if (this.worker) return this.worker;
 		if (this.creating) return this.creating;
+		if (this.worker) return this.worker;
 
 		this.creating = (async () => {
 			const worker = this.options.createWorker ? await this.options.createWorker() : await createDefaultWorker(this.options);
@@ -233,6 +236,13 @@ export class WorkerClient {
 			this.worker = worker;
 			this.attachListeners(worker);
 
+			try {
+				await this.waitForWorkerReady(worker);
+			} catch (error) {
+				this.failWorker(toError(error));
+				throw error;
+			}
+
 			return worker;
 		})().finally(() => {
 			this.creating = null;
@@ -244,6 +254,13 @@ export class WorkerClient {
 	private attachListeners(worker: WorkerLike): void {
 		const listeners: WorkerListeners = {
 			message: (event: any) => {
+				if (event?.data?.type === "__QRDT_WORKER_READY__") {
+					if (this.workerReadyWorker === worker) {
+						this.workerReadyResolver?.();
+					}
+					return;
+				}
+
 				const response = getResponseData(event);
 
 				if (!response || typeof response.id !== "string") return;
@@ -295,6 +312,71 @@ export class WorkerClient {
 		}
 	}
 
+	private async waitForWorkerReady(worker: WorkerLike): Promise<void> {
+		if (!worker.postMessage) {
+			throw new Error("Worker does not support postMessage.");
+		}
+
+		this.workerReadyWorker = worker;
+
+		try {
+			await new Promise<void>((resolve, reject) => {
+				let settled = false;
+				let retryTimer: ReturnType<typeof setTimeout> | undefined;
+				let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+
+				const cleanup = () => {
+					if (retryTimer !== undefined) clearTimeout(retryTimer);
+					if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+					if (this.workerReadyResolver === onReady) {
+						this.workerReadyResolver = null;
+					}
+				};
+
+				const finish = () => {
+					if (settled) return;
+					settled = true;
+					cleanup();
+					resolve();
+				};
+
+				const onReady = () => finish();
+				this.workerReadyResolver = onReady;
+
+				const ping = () => {
+					if (settled) return;
+
+					try {
+						worker.postMessage({ type: "__QRDT_WORKER_PING__" });
+					} catch (error) {
+						settled = true;
+						cleanup();
+						reject(toError(error));
+						return;
+					}
+
+					retryTimer = setTimeout(ping, 100);
+				};
+
+				timeoutTimer = setTimeout(
+					() => {
+						if (settled) return;
+						settled = true;
+						cleanup();
+						reject(new Error("Worker initialization timed out."));
+					},
+					this.timeout > 0 ? this.timeout : 10000,
+				);
+
+				ping();
+			});
+		} finally {
+			if (this.workerReadyWorker === worker) {
+				this.workerReadyWorker = null;
+			}
+		}
+	}
+
 	private detachListeners(worker: WorkerLike): void {
 		const listeners = this.listeners;
 		if (!listeners) return;
@@ -332,7 +414,6 @@ export class WorkerClient {
 	private failWorker(error: Error): void {
 		if (this.failed || this.disposed) return;
 
-		console.error("[WorkerClient] Worker failed:", error);
 		this.failed = true;
 
 		const worker = this.worker;
@@ -575,6 +656,12 @@ export async function setupWorkerSelfListener(): Promise<void> {
 		workerListenerSetup = true;
 
 		self.addEventListener("message", async (event: MessageEvent<WorkerRequestMessage>) => {
+			// Client からの起動確認
+			if (event.data.type === "__QRDT_WORKER_PING__") {
+				self.postMessage({ type: "__QRDT_WORKER_READY__" });
+				return;
+			}
+
 			const response = await handleWorkerMessage(event.data);
 			self.postMessage(response);
 		});
@@ -597,9 +684,19 @@ export async function setupWorkerSelfListener(): Promise<void> {
 		workerListenerSetup = true;
 
 		nodeModule.parentPort.on("message", async (message) => {
+			// Client からの起動確認
+			if ((message as { type?: string }).type === "__QRDT_WORKER_PING__") {
+				nodeModule.parentPort?.postMessage({
+					type: "__QRDT_WORKER_READY__",
+				});
+				return;
+			}
+
 			const response = await handleWorkerMessage(message);
 			nodeModule.parentPort?.postMessage(response);
 		});
+
+		return;
 	}
 }
 

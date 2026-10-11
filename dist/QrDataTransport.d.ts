@@ -178,7 +178,7 @@ declare class DataApi {
     static decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Uint8Array;
 }
 
-type WorkerRequestType = "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage";
+type WorkerRequestType = "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage" | "__QRDT_WORKER_PING__" | "__QRDT_WORKER_READY__";
 interface WorkerRequestMessage {
     id: string;
     type: WorkerRequestType;
@@ -223,6 +223,8 @@ declare class WorkerClient {
     private disposed;
     private failed;
     private sequence;
+    private workerReadyResolver;
+    private workerReadyWorker;
     private readonly pending;
     private readonly enabled;
     private readonly fallback;
@@ -234,6 +236,7 @@ declare class WorkerClient {
     private nextId;
     private getWorker;
     private attachListeners;
+    private waitForWorkerReady;
     private detachListeners;
     private settleFallback;
     private failWorker;
@@ -467,5 +470,7 @@ declare class TransportApi {
     private checkCompletion;
 }
 
-export { AppConfig, BrowserRuntimeApi, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, WorkerClient, handleWorkerMessage, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener };
+declare const VERSION: string;
+
+export { AppConfig, BrowserRuntimeApi, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, WorkerClient, handleWorkerMessage, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener, VERSION as version };
 export type { CameraOptions, DecodedResult, ErrorCode, ReceiveOptions, RenderQrOptions, RuntimeApi, SendOptions, TransportError, TransportState, TransportWarning, WarningCode, WorkerClientOptions };

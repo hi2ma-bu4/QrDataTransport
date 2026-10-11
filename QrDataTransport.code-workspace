@@ -14,6 +14,7 @@
 			"cdylib",
 			"HDLC",
 			"qrcodegen",
+			"QRDT",
 			"refin",
 			"refout",
 			"rxing",

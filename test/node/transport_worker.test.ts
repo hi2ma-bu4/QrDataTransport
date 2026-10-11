@@ -4,11 +4,20 @@ import { AppConfig, handleWorkerMessage, TransportApi } from "../../dist/QrDataT
 
 const createMockWorker = () => {
 	const listeners = new Map<string, Array<(e: any) => void>>();
+
+	const dispatch = (event: string, data: any) => {
+		const list = listeners.get(event) || [];
+		for (const fn of list) {
+			fn({ data });
+		}
+	};
+
 	return {
 		addEventListener(event: string, fn: (e: any) => void) {
 			if (!listeners.has(event)) listeners.set(event, []);
 			listeners.get(event)!.push(fn);
 		},
+
 		removeEventListener(event: string, fn: (e: any) => void) {
 			const list = listeners.get(event) || [];
 			listeners.set(
@@ -16,15 +25,24 @@ const createMockWorker = () => {
 				list.filter((l) => l !== fn),
 			);
 		},
+
 		postMessage(data: any) {
+			// 本物の Worker と同じ READY ハンドシェイクに対応
+			if (data?.type === "__QRDT_WORKER_PING__") {
+				Promise.resolve().then(() => {
+					dispatch("message", {
+						type: "__QRDT_WORKER_READY__",
+					});
+				});
+				return;
+			}
+
 			Promise.resolve().then(async () => {
 				const response = await handleWorkerMessage(data);
-				const list = listeners.get("message") || [];
-				for (const fn of list) {
-					fn({ data: response });
-				}
+				dispatch("message", response);
 			});
 		},
+
 		terminate() {},
 	};
 };
