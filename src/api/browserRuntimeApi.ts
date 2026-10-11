@@ -258,9 +258,6 @@ export class BrowserRuntimeApi implements RuntimeApi {
 	 * @returns 解決されたHTMLCanvasElement、取得できない場合はnull
 	 */
 	private resolveCanvas(canvasTarget?: HTMLCanvasElement | string): HTMLCanvasElement | null {
-		if (canvasTarget && typeof canvasTarget !== "string") {
-			return canvasTarget as HTMLCanvasElement;
-		}
 		if (typeof document === "undefined") {
 			return null;
 		}
@@ -273,6 +270,9 @@ export class BrowserRuntimeApi implements RuntimeApi {
 				return el;
 			}
 			return document.querySelector<HTMLCanvasElement>(canvasTarget);
+		}
+		if (canvasTarget instanceof HTMLCanvasElement) {
+			return canvasTarget;
 		}
 		return null;
 	}
@@ -294,8 +294,8 @@ export class BrowserRuntimeApi implements RuntimeApi {
 			return;
 		}
 
-		const canvasWidth = options?.width ?? this.config.qrWidth ?? this.config.canvasWidth ?? canvas.width ?? 300;
-		const canvasHeight = options?.height ?? this.config.qrHeight ?? this.config.canvasHeight ?? canvas.height ?? 300;
+		const canvasWidth = options?.width ?? this.config.qrWidth ?? canvas.width ?? 300;
+		const canvasHeight = options?.height ?? this.config.qrHeight ?? canvas.height ?? 300;
 		canvas.width = canvasWidth;
 		canvas.height = canvasHeight;
 
@@ -376,8 +376,8 @@ export class BrowserRuntimeApi implements RuntimeApi {
 
 		const facingMode = options?.facingMode ?? this.config.facingMode;
 		const deviceId = options?.deviceId ?? this.config.deviceId;
-		const reqWidth = options?.width ?? this.config.canvasWidth;
-		const reqHeight = options?.height ?? this.config.canvasHeight;
+		const reqWidth = options?.width ?? this.config.cameraWidth;
+		const reqHeight = options?.height ?? this.config.cameraHeight;
 
 		const videoConstraints: MediaTrackConstraints = {
 			width: reqWidth ? { ideal: reqWidth } : undefined,

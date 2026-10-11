@@ -289,14 +289,14 @@ export interface BrowserRuntimeConfigOptions {
 	qrHeight?: number;
 
 	/**
-	 * キャンバス幅 (ピクセル)
+	 * カメラ幅 (ピクセル)
 	 */
-	canvasWidth?: number;
+	cameraWidth?: number;
 
 	/**
-	 * キャンバス高さ (ピクセル)
+	 * カメラ高さ (ピクセル)
 	 */
-	canvasHeight?: number;
+	cameraHeight?: number;
 
 	/**
 	 * カメラの向き ("environment" | "user" | string)
@@ -334,14 +334,14 @@ export class BrowserRuntimeConfig {
 	public qrHeight: number;
 
 	/**
-	 * キャンバス幅 (ピクセル)
+	 * カメラ幅 (ピクセル)
 	 */
-	public canvasWidth: number;
+	public cameraWidth: number | undefined;
 
 	/**
-	 * キャンバス高さ (ピクセル)
+	 * カメラ高さ (ピクセル)
 	 */
-	public canvasHeight: number;
+	public cameraHeight: number | undefined;
 
 	/**
 	 * カメラの向き ("environment" | "user" | string)
@@ -363,8 +363,8 @@ export class BrowserRuntimeConfig {
 		this.cameraFps = options?.cameraFps ?? 60;
 		this.qrWidth = options?.qrWidth ?? 300;
 		this.qrHeight = options?.qrHeight ?? 300;
-		this.canvasWidth = options?.canvasWidth ?? 300;
-		this.canvasHeight = options?.canvasHeight ?? 300;
+		this.cameraWidth = options?.cameraWidth;
+		this.cameraHeight = options?.cameraHeight;
 		this.facingMode = options?.facingMode ?? "environment";
 		this.deviceId = options?.deviceId;
 	}
@@ -380,8 +380,8 @@ export class BrowserRuntimeConfig {
 			cameraFps: this.cameraFps,
 			qrWidth: this.qrWidth,
 			qrHeight: this.qrHeight,
-			canvasWidth: this.canvasWidth,
-			canvasHeight: this.canvasHeight,
+			cameraWidth: this.cameraWidth,
+			cameraHeight: this.cameraHeight,
 			facingMode: this.facingMode,
 			deviceId: this.deviceId,
 		});

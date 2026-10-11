@@ -10426,13 +10426,13 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
    */
   qrHeight;
   /**
-   * キャンバス幅 (ピクセル)
+   * カメラ幅 (ピクセル)
    */
-  canvasWidth;
+  cameraWidth;
   /**
-   * キャンバス高さ (ピクセル)
+   * カメラ高さ (ピクセル)
    */
-  canvasHeight;
+  cameraHeight;
   /**
    * カメラの向き ("environment" | "user" | string)
    */
@@ -10451,8 +10451,8 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
     this.cameraFps = options?.cameraFps ?? 60;
     this.qrWidth = options?.qrWidth ?? 300;
     this.qrHeight = options?.qrHeight ?? 300;
-    this.canvasWidth = options?.canvasWidth ?? 300;
-    this.canvasHeight = options?.canvasHeight ?? 300;
+    this.cameraWidth = options?.cameraWidth;
+    this.cameraHeight = options?.cameraHeight;
     this.facingMode = options?.facingMode ?? "environment";
     this.deviceId = options?.deviceId;
   }
@@ -10467,8 +10467,8 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
       cameraFps: this.cameraFps,
       qrWidth: this.qrWidth,
       qrHeight: this.qrHeight,
-      canvasWidth: this.canvasWidth,
-      canvasHeight: this.canvasHeight,
+      cameraWidth: this.cameraWidth,
+      cameraHeight: this.cameraHeight,
       facingMode: this.facingMode,
       deviceId: this.deviceId
     });
@@ -10604,9 +10604,6 @@ var BrowserRuntimeApi = class {
    * @returns 解決されたHTMLCanvasElement、取得できない場合はnull
    */
   resolveCanvas(canvasTarget) {
-    if (canvasTarget && typeof canvasTarget !== "string") {
-      return canvasTarget;
-    }
     if (typeof document === "undefined") {
       return null;
     }
@@ -10619,6 +10616,9 @@ var BrowserRuntimeApi = class {
         return el;
       }
       return document.querySelector(canvasTarget);
+    }
+    if (canvasTarget instanceof HTMLCanvasElement) {
+      return canvasTarget;
     }
     return null;
   }
@@ -10637,8 +10637,8 @@ var BrowserRuntimeApi = class {
     if (!ctx) {
       return;
     }
-    const canvasWidth = options?.width ?? this.config.qrWidth ?? this.config.canvasWidth ?? canvas.width ?? 300;
-    const canvasHeight = options?.height ?? this.config.qrHeight ?? this.config.canvasHeight ?? canvas.height ?? 300;
+    const canvasWidth = options?.width ?? this.config.qrWidth ?? canvas.width ?? 300;
+    const canvasHeight = options?.height ?? this.config.qrHeight ?? canvas.height ?? 300;
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
     const { width, height, modules } = matrix;
@@ -10707,8 +10707,8 @@ var BrowserRuntimeApi = class {
     this.stopCamera();
     const facingMode = options?.facingMode ?? this.config.facingMode;
     const deviceId = options?.deviceId ?? this.config.deviceId;
-    const reqWidth = options?.width ?? this.config.canvasWidth;
-    const reqHeight = options?.height ?? this.config.canvasHeight;
+    const reqWidth = options?.width ?? this.config.cameraWidth;
+    const reqHeight = options?.height ?? this.config.cameraHeight;
     const videoConstraints = {
       width: reqWidth ? { ideal: reqWidth } : void 0,
       height: reqHeight ? { ideal: reqHeight } : void 0
@@ -11872,8 +11872,8 @@ var TransportApi = class {
           const matrix = DataApi.generateQrMatrix(currentFrame, this.config.data.qrVersion, this.config.data.ecLevel);
           this.runtime.renderQrModuleMatrix(matrix, {
             canvas: this.sendCanvasTarget,
-            width: options?.renderOptions?.width ?? this.config.browserRuntime.qrWidth ?? this.config.browserRuntime.canvasWidth,
-            height: options?.renderOptions?.height ?? this.config.browserRuntime.qrHeight ?? this.config.browserRuntime.canvasHeight,
+            width: options?.renderOptions?.width ?? this.config.browserRuntime.qrWidth,
+            height: options?.renderOptions?.height ?? this.config.browserRuntime.qrHeight,
             ...options?.renderOptions
           });
         } catch {
@@ -12373,7 +12373,7 @@ var TransportApi = class {
 };
 
 // src/config/version.ts
-var VERSION = "1.0.0";
+var VERSION = "1.0.1";
 export {
   AppConfig,
   BrowserRuntimeApi,

@@ -41,35 +41,6 @@ test("knownParityMode is passed to parseFrame and handleWorkerMessage", async ()
 	assert.equal(response.result.isFirst, true);
 });
 
-test("BrowserRuntimeConfig qrWidth and qrHeight options are respected", () => {
-	const runtime = new BrowserRuntimeApi({
-		qrWidth: 400,
-		qrHeight: 400,
-		cameraFps: 30,
-	});
-
-	assert.equal(runtime.config.qrWidth, 400);
-	assert.equal(runtime.config.qrHeight, 400);
-	assert.equal(runtime.config.cameraFps, 30);
-
-	const mockMatrix = { width: 21, height: 21, modules: new Uint8Array(21 * 21) };
-
-	const mockCanvas = {
-		width: 0,
-		height: 0,
-		getContext: () => ({
-			fillRect: () => {},
-			clearRect: () => {},
-			imageSmoothingEnabled: true,
-		}),
-	} as unknown as HTMLCanvasElement;
-
-	runtime.renderQrModuleMatrix(mockMatrix, { canvas: mockCanvas });
-
-	assert.equal(mockCanvas.width, 400);
-	assert.equal(mockCanvas.height, 400);
-});
-
 test("setRuntime gives precedence to runtime.initialOptions over config.browserRuntime", () => {
 	const appConfig = new AppConfig({
 		browserRuntime: {

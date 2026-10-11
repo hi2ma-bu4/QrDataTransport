@@ -570,8 +570,8 @@ export class TransportApi {
 					const matrix = DataApi.generateQrMatrix(currentFrame, this.config.data.qrVersion, this.config.data.ecLevel);
 					this.runtime.renderQrModuleMatrix(matrix, {
 						canvas: this.sendCanvasTarget,
-						width: options?.renderOptions?.width ?? this.config.browserRuntime.qrWidth ?? this.config.browserRuntime.canvasWidth,
-						height: options?.renderOptions?.height ?? this.config.browserRuntime.qrHeight ?? this.config.browserRuntime.canvasHeight,
+						width: options?.renderOptions?.width ?? this.config.browserRuntime.qrWidth,
+						height: options?.renderOptions?.height ?? this.config.browserRuntime.qrHeight,
 						...options?.renderOptions,
 					});
 				} catch {

@@ -546,13 +546,13 @@ interface BrowserRuntimeConfigOptions {
      */
     qrHeight?: number;
     /**
-     * キャンバス幅 (ピクセル)
+     * カメラ幅 (ピクセル)
      */
-    canvasWidth?: number;
+    cameraWidth?: number;
     /**
-     * キャンバス高さ (ピクセル)
+     * カメラ高さ (ピクセル)
      */
-    canvasHeight?: number;
+    cameraHeight?: number;
     /**
      * カメラの向き ("environment" | "user" | string)
      */
@@ -583,13 +583,13 @@ declare class BrowserRuntimeConfig {
      */
     qrHeight: number;
     /**
-     * キャンバス幅 (ピクセル)
+     * カメラ幅 (ピクセル)
      */
-    canvasWidth: number;
+    cameraWidth: number | undefined;
     /**
-     * キャンバス高さ (ピクセル)
+     * カメラ高さ (ピクセル)
      */
-    canvasHeight: number;
+    cameraHeight: number | undefined;
     /**
      * カメラの向き ("environment" | "user" | string)
      */

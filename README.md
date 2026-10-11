@@ -322,8 +322,8 @@ const config = new AppConfig({
     renderFps: 60,
     qrWidth: 300,
     qrHeight: 300,
-    canvasWidth: 300,
-    canvasHeight: 300,
+    cameraWidth: undefined,
+    cameraHeight: undefined,
     facingMode: "environment",
   },
 });
@@ -345,7 +345,7 @@ const config = new AppConfig({
 | **BrowserRuntime** | `cameraFps` | `number` | `60` | カメラキャプチャのターゲット FPS |
 | | `renderFps` | `number` | `60` | QRレンダリングのターゲット FPS |
 | | `qrWidth` / `qrHeight` | `number` | `300` | QR描画サイズのデフォルト寸法（ピクセル） |
-| | `canvasWidth` / `canvasHeight` | `number` | `300` | Canvas自体のデフォルト寸法（ピクセル） |
+| | `cameraWidth` / `cameraHeight` | `number` | `300` | カメラ描画のデフォルト寸法（ピクセル） |
 | | `facingMode` | `string` | `"environment"` | カメラのデフォルト向き（`"environment"` / `"user"`） |
 | | `deviceId` | `string` | `undefined` | 使用するカメラの固有デバイスID |
 

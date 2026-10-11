@@ -3,10 +3,10 @@ import { test } from "node:test";
 import { BrowserRuntimeApi } from "../../dist/QrDataTransport.js";
 
 test("BrowserRuntimeApi instantiation and features", async () => {
-	const runtime = new BrowserRuntimeApi({ cameraFps: 60, canvasWidth: 400 });
+	const runtime = new BrowserRuntimeApi({ cameraFps: 60, cameraWidth: 400 });
 
 	assert.strictEqual(runtime.config.cameraFps, 60);
-	assert.strictEqual(runtime.config.canvasWidth, 400);
+	assert.strictEqual(runtime.config.cameraWidth, 400);
 
 	// In Node environment, Worker is defined
 	assert.strictEqual(typeof runtime.isWorkerSupported(), "boolean");
