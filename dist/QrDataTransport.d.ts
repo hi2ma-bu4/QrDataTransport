@@ -813,6 +813,10 @@ declare class BrowserRuntimeApi implements RuntimeApi {
      */
     private cameraAnimationId;
     /**
+     * カメラキャプチャループのVideoFrameCallback ID
+     */
+    private cameraVideoFrameCallbackId;
+    /**
      * BrowserRuntimeApiのインスタンスを生成
      *
      * @param config - ランタイム設定または設定オプション

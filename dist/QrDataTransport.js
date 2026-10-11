@@ -10542,6 +10542,10 @@ var BrowserRuntimeApi = class {
    */
   cameraAnimationId = null;
   /**
+   * カメラキャプチャループのVideoFrameCallback ID
+   */
+  cameraVideoFrameCallbackId = null;
+  /**
    * BrowserRuntimeApiのインスタンスを生成
    *
    * @param config - ランタイム設定または設定オプション
@@ -10744,39 +10748,50 @@ var BrowserRuntimeApi = class {
     const fps = options?.fps && options.fps > 0 ? options.fps : this.config.cameraFps > 0 ? this.config.cameraFps : 60;
     const intervalMs = 1e3 / fps;
     let lastFrameTime = 0;
-    const captureLoop = (now2) => {
-      if (!this.cameraVideo || !this.cameraStream) {
-        return;
-      }
-      if (now2 - lastFrameTime >= intervalMs) {
-        lastFrameTime = now2;
-        const vWidth = this.cameraVideo.videoWidth;
-        const vHeight = this.cameraVideo.videoHeight;
-        if (vWidth > 0 && vHeight > 0 && ctx) {
-          canvas.width = vWidth;
-          canvas.height = vHeight;
-          ctx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
-          const imgData = ctx.getImageData(0, 0, vWidth, vHeight);
-          if (options?.previewCanvas) {
-            const pCanvas = this.resolveCanvas(options.previewCanvas);
-            if (pCanvas) {
-              const pCtx = pCanvas.getContext("2d");
-              if (pCtx) {
-                if (pCanvas.width !== vWidth) pCanvas.width = vWidth;
-                if (pCanvas.height !== vHeight) pCanvas.height = vHeight;
-                pCtx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
-                if (options.drawOverlay) {
-                  options.drawOverlay(pCtx, vWidth, vHeight);
-                }
-              }
-            }
+    const video = this.cameraVideo;
+    const processFrame = () => {
+      if (this.cameraVideo !== video || !this.cameraStream) return;
+      const vWidth = video.videoWidth;
+      const vHeight = video.videoHeight;
+      if (vWidth <= 0 || vHeight <= 0 || !ctx) return;
+      if (canvas.width !== vWidth) canvas.width = vWidth;
+      if (canvas.height !== vHeight) canvas.height = vHeight;
+      ctx.drawImage(video, 0, 0, vWidth, vHeight);
+      const imgData = ctx.getImageData(0, 0, vWidth, vHeight);
+      if (options?.previewCanvas) {
+        const pCanvas = this.resolveCanvas(options.previewCanvas);
+        if (pCanvas) {
+          const pCtx = pCanvas.getContext("2d");
+          if (pCtx) {
+            if (pCanvas.width !== vWidth) pCanvas.width = vWidth;
+            if (pCanvas.height !== vHeight) pCanvas.height = vHeight;
+            pCtx.drawImage(video, 0, 0, vWidth, vHeight);
+            options.drawOverlay?.(pCtx, vWidth, vHeight);
           }
-          onFrame(new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength), vWidth, vHeight);
         }
       }
-      this.cameraAnimationId = requestAnimationFrame(captureLoop);
+      onFrame(new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength), vWidth, vHeight);
     };
-    this.cameraAnimationId = requestAnimationFrame(captureLoop);
+    const processFrameIfDue = (now2) => {
+      if (now2 - lastFrameTime < intervalMs) return;
+      lastFrameTime = now2;
+      processFrame();
+    };
+    if ("requestVideoFrameCallback" in video) {
+      const captureLoop = (now2, _metadata) => {
+        if (this.cameraVideo !== video || !this.cameraStream) return;
+        processFrameIfDue(now2);
+        this.cameraVideoFrameCallbackId = video.requestVideoFrameCallback(captureLoop);
+      };
+      this.cameraVideoFrameCallbackId = video.requestVideoFrameCallback(captureLoop);
+    } else {
+      const captureLoop = (now2) => {
+        if (this.cameraVideo !== video || !this.cameraStream) return;
+        processFrameIfDue(now2);
+        this.cameraAnimationId = requestAnimationFrame(captureLoop);
+      };
+      this.cameraAnimationId = requestAnimationFrame(captureLoop);
+    }
   }
   /**
    * カメラを停止
@@ -10785,6 +10800,10 @@ var BrowserRuntimeApi = class {
     if (this.cameraAnimationId !== null && typeof cancelAnimationFrame !== "undefined") {
       cancelAnimationFrame(this.cameraAnimationId);
       this.cameraAnimationId = null;
+    }
+    if (this.cameraVideo && this.cameraVideoFrameCallbackId !== null) {
+      this.cameraVideo.cancelVideoFrameCallback(this.cameraVideoFrameCallbackId);
+      this.cameraVideoFrameCallbackId = null;
     }
     if (this.cameraStream) {
       for (const track of this.cameraStream.getTracks()) {
