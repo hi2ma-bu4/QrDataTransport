@@ -10715,7 +10715,8 @@ var BrowserRuntimeApi = class {
     const reqHeight = options?.height ?? this.config.cameraHeight;
     const videoConstraints = {
       width: reqWidth ? { ideal: reqWidth } : void 0,
-      height: reqHeight ? { ideal: reqHeight } : void 0
+      height: reqHeight ? { ideal: reqHeight } : void 0,
+      frameRate: { ideal: 60 }
     };
     if (deviceId) {
       videoConstraints.deviceId = { exact: deviceId };
@@ -10726,7 +10727,7 @@ var BrowserRuntimeApi = class {
       video: videoConstraints
     };
     this.cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-    if (options?.isManual ?? true) {
+    if (options?.isManual) {
       const track = this.cameraStream.getVideoTracks()[0];
       if (track) {
         try {
@@ -12392,7 +12393,7 @@ var TransportApi = class {
 };
 
 // src/config/version.ts
-var VERSION = "1.0.2";
+var VERSION = "1.0.3";
 export {
   AppConfig,
   BrowserRuntimeApi,

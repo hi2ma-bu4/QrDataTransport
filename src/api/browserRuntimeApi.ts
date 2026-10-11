@@ -387,6 +387,7 @@ export class BrowserRuntimeApi implements RuntimeApi {
 		const videoConstraints: MediaTrackConstraints = {
 			width: reqWidth ? { ideal: reqWidth } : undefined,
 			height: reqHeight ? { ideal: reqHeight } : undefined,
+			frameRate: { ideal: 60 },
 		};
 
 		if (deviceId) {
@@ -401,7 +402,7 @@ export class BrowserRuntimeApi implements RuntimeApi {
 
 		this.cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
 
-		if (options?.isManual ?? true) {
+		if (options?.isManual) {
 			const track = this.cameraStream.getVideoTracks()[0];
 
 			if (track) {

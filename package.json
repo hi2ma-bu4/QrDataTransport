@@ -1,6 +1,6 @@
 {
   "name": "qrdatatransport",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "QRコードにてデータ通信を行うjs/tsライブラリ",
   "license": "Apache-2.0",
   "author": "hi2ma-bu4",
