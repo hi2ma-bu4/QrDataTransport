@@ -38,7 +38,6 @@ test("BrowserRuntimeConfig default values and camera options", () => {
 	const config = new BrowserRuntimeConfig();
 	assert.equal(config.renderFps, 60);
 	assert.equal(config.cameraFps, 60);
-	assert.equal(config.decodeFrequency, 60);
 	assert.equal(config.qrWidth, 300);
 	assert.equal(config.qrHeight, 300);
 	assert.equal(config.facingMode, "environment");
@@ -47,13 +46,11 @@ test("BrowserRuntimeConfig default values and camera options", () => {
 	const customConfig = new BrowserRuntimeConfig({
 		renderFps: 120,
 		cameraFps: 30,
-		decodeFrequency: 30,
 		facingMode: "user",
 		deviceId: "cam-123",
 	});
 	assert.equal(customConfig.renderFps, 120);
 	assert.equal(customConfig.cameraFps, 30);
-	assert.equal(customConfig.decodeFrequency, 30);
 	assert.equal(customConfig.facingMode, "user");
 	assert.equal(customConfig.deviceId, "cam-123");
 });

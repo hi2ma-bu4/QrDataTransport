@@ -76,7 +76,7 @@ export class TransportApi {
 	private knownFirstFrameCrc?: number;
 	private consecutiveCrcErrors = 0;
 	private receiveStartTime: number | null = null;
-	private totalReceivedWireBits = 0;
+	private totalReceivedPayloadBits = 0;
 	private lastQrDetected = false;
 
 	constructor(config?: AppConfig, runtime?: RuntimeApi) {
@@ -88,7 +88,7 @@ export class TransportApi {
 		this.runtime = runtime;
 		if (this.runtime && this.runtime instanceof BrowserRuntimeApi) {
 			if (this.runtime.initialOptions) {
-				// Constructor options take lower precedence than transport's config.browserRuntime
+				// Runtime's constructor options take precedence over transport's config.browserRuntime
 				this.runtime.config = new BrowserRuntimeConfig({
 					...this.config.browserRuntime,
 					...this.runtime.initialOptions,
@@ -134,7 +134,7 @@ export class TransportApi {
 		if (this.receiveStartTime !== null) {
 			const elapsedSec = (performance.now() - this.receiveStartTime) / 1000;
 			if (elapsedSec > 0) {
-				bps = Math.round(this.totalReceivedWireBits / elapsedSec);
+				bps = Math.round(this.totalReceivedPayloadBits / elapsedSec);
 			}
 		}
 		return {
@@ -294,8 +294,8 @@ export class TransportApi {
 					const matrix = DataApi.generateQrMatrix(currentFrame, this.config.data.qrVersion, this.config.data.ecLevel);
 					this.runtime.renderQrModuleMatrix(matrix, {
 						canvas: this.sendCanvasTarget,
-						width: this.config.browserRuntime.canvasWidth,
-						height: this.config.browserRuntime.canvasHeight,
+						width: options?.renderOptions?.width ?? this.config.browserRuntime.qrWidth ?? this.config.browserRuntime.canvasWidth,
+						height: options?.renderOptions?.height ?? this.config.browserRuntime.qrHeight ?? this.config.browserRuntime.canvasHeight,
 						...options?.renderOptions,
 					});
 				} catch {
@@ -384,7 +384,7 @@ export class TransportApi {
 		this.knownFirstFrameCrc = undefined;
 		this.consecutiveCrcErrors = 0;
 		this.receiveStartTime = null;
-		this.totalReceivedWireBits = 0;
+		this.totalReceivedPayloadBits = 0;
 		this.lastQrDetected = false;
 		if (this.workerClient) {
 			this.workerClient.dispose();
@@ -445,9 +445,10 @@ export class TransportApi {
 				wireBytes,
 				knownTotalQrCount: this.knownTotalQrCount,
 				knownFirstFrameCrc: this.knownFirstFrameCrc,
+				knownParityMode: this.config.data.parityMode,
 			});
 		}
-		return DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+		return DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc, this.config.data.parityMode);
 	}
 
 	public processFrame(wireBytes?: Uint8Array | null): void | Promise<void> {
@@ -572,7 +573,7 @@ export class TransportApi {
 		this.knownTotalQrCount = metadata.totalQrCount;
 		this.knownFirstFrameCrc = metadata.frameCrc;
 		this.storedFrames.set(0, wireBytes);
-		this.totalReceivedWireBits += wireBytes.length * 8;
+		this.totalReceivedPayloadBits += metadata.payloadBitLen;
 		this.state = metadata.totalQrCount === 1 ? "OverallCrcVerification" : "FirstEstablished";
 
 		if (metadata.totalQrCount === 1) {
@@ -678,7 +679,7 @@ export class TransportApi {
 
 			// New Frame arrival (CRC valid)
 			this.storedFrames.set(metadata.frameNumber, wireBytes);
-			this.totalReceivedWireBits += wireBytes.length * 8;
+			this.totalReceivedPayloadBits += metadata.payloadBitLen;
 
 			if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
 				this.state = "Receiving";

@@ -10371,7 +10371,6 @@ var DataConfig = class _DataConfig {
 var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
   renderFps;
   cameraFps;
-  decodeFrequency;
   qrWidth;
   qrHeight;
   canvasWidth;
@@ -10381,7 +10380,6 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
   constructor(options) {
     this.renderFps = options?.renderFps ?? 60;
     this.cameraFps = options?.cameraFps ?? 60;
-    this.decodeFrequency = options?.decodeFrequency ?? 60;
     this.qrWidth = options?.qrWidth ?? 300;
     this.qrHeight = options?.qrHeight ?? 300;
     this.canvasWidth = options?.canvasWidth ?? 300;
@@ -10393,7 +10391,6 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
     return new _BrowserRuntimeConfig({
       renderFps: this.renderFps,
       cameraFps: this.cameraFps,
-      decodeFrequency: this.decodeFrequency,
       qrWidth: this.qrWidth,
       qrHeight: this.qrHeight,
       canvasWidth: this.canvasWidth,
@@ -10466,6 +10463,9 @@ var BrowserRuntimeApi = class {
     return { name, data };
   }
   resolveCanvas(canvasTarget) {
+    if (canvasTarget && typeof canvasTarget !== "string") {
+      return canvasTarget;
+    }
     if (typeof document === "undefined") {
       return null;
     }
@@ -10479,9 +10479,6 @@ var BrowserRuntimeApi = class {
       }
       return document.querySelector(canvasTarget);
     }
-    if (canvasTarget instanceof HTMLCanvasElement) {
-      return canvasTarget;
-    }
     return null;
   }
   renderQrModuleMatrix(matrix, options) {
@@ -10493,8 +10490,8 @@ var BrowserRuntimeApi = class {
     if (!ctx) {
       return;
     }
-    const canvasWidth = options?.width ?? this.config.canvasWidth ?? canvas.width ?? 300;
-    const canvasHeight = options?.height ?? this.config.canvasHeight ?? canvas.height ?? 300;
+    const canvasWidth = options?.width ?? this.config.qrWidth ?? this.config.canvasWidth ?? canvas.width ?? 300;
+    const canvasHeight = options?.height ?? this.config.qrHeight ?? this.config.canvasHeight ?? canvas.height ?? 300;
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
     const { width, height, modules } = matrix;
@@ -11108,8 +11105,8 @@ async function handleWorkerMessage(msg) {
     let result;
     switch (msg.type) {
       case "parseFrame": {
-        const { wireBytes, knownTotalQrCount, knownFirstFrameCrc } = msg.payload;
-        result = DataApi.parseFrame(wireBytes instanceof Uint8Array ? wireBytes : new Uint8Array(wireBytes), knownTotalQrCount, knownFirstFrameCrc);
+        const { wireBytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode } = msg.payload;
+        result = DataApi.parseFrame(wireBytes instanceof Uint8Array ? wireBytes : new Uint8Array(wireBytes), knownTotalQrCount, knownFirstFrameCrc, knownParityMode);
         break;
       }
       case "decodeFrames": {
@@ -11211,7 +11208,7 @@ var TransportApi = class {
   knownFirstFrameCrc;
   consecutiveCrcErrors = 0;
   receiveStartTime = null;
-  totalReceivedWireBits = 0;
+  totalReceivedPayloadBits = 0;
   lastQrDetected = false;
   constructor(config, runtime) {
     this.config = config ? config.clone() : new AppConfig();
@@ -11257,7 +11254,7 @@ var TransportApi = class {
     if (this.receiveStartTime !== null) {
       const elapsedSec = (performance.now() - this.receiveStartTime) / 1e3;
       if (elapsedSec > 0) {
-        bps = Math.round(this.totalReceivedWireBits / elapsedSec);
+        bps = Math.round(this.totalReceivedPayloadBits / elapsedSec);
       }
     }
     return {
@@ -11402,8 +11399,8 @@ var TransportApi = class {
           const matrix = DataApi.generateQrMatrix(currentFrame, this.config.data.qrVersion, this.config.data.ecLevel);
           this.runtime.renderQrModuleMatrix(matrix, {
             canvas: this.sendCanvasTarget,
-            width: this.config.browserRuntime.canvasWidth,
-            height: this.config.browserRuntime.canvasHeight,
+            width: options?.renderOptions?.width ?? this.config.browserRuntime.qrWidth ?? this.config.browserRuntime.canvasWidth,
+            height: options?.renderOptions?.height ?? this.config.browserRuntime.qrHeight ?? this.config.browserRuntime.canvasHeight,
             ...options?.renderOptions
           });
         } catch {
@@ -11479,7 +11476,7 @@ var TransportApi = class {
     this.knownFirstFrameCrc = void 0;
     this.consecutiveCrcErrors = 0;
     this.receiveStartTime = null;
-    this.totalReceivedWireBits = 0;
+    this.totalReceivedPayloadBits = 0;
     this.lastQrDetected = false;
     if (this.workerClient) {
       this.workerClient.dispose();
@@ -11533,10 +11530,11 @@ var TransportApi = class {
       return worker.request("parseFrame", {
         wireBytes,
         knownTotalQrCount: this.knownTotalQrCount,
-        knownFirstFrameCrc: this.knownFirstFrameCrc
+        knownFirstFrameCrc: this.knownFirstFrameCrc,
+        knownParityMode: this.config.data.parityMode
       });
     }
-    return DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc);
+    return DataApi.parseFrame(wireBytes, this.knownTotalQrCount, this.knownFirstFrameCrc, this.config.data.parityMode);
   }
   processFrame(wireBytes) {
     if (this.state === "Idle" || this.state === "Completed" || this.state === "Error") {
@@ -11640,7 +11638,7 @@ var TransportApi = class {
     this.knownTotalQrCount = metadata2.totalQrCount;
     this.knownFirstFrameCrc = metadata2.frameCrc;
     this.storedFrames.set(0, wireBytes);
-    this.totalReceivedWireBits += wireBytes.length * 8;
+    this.totalReceivedPayloadBits += metadata2.payloadBitLen;
     this.state = metadata2.totalQrCount === 1 ? "OverallCrcVerification" : "FirstEstablished";
     if (metadata2.totalQrCount === 1) {
       this.checkCompletion();
@@ -11730,7 +11728,7 @@ var TransportApi = class {
         }
       }
       this.storedFrames.set(metadata2.frameNumber, wireBytes);
-      this.totalReceivedWireBits += wireBytes.length * 8;
+      this.totalReceivedPayloadBits += metadata2.payloadBitLen;
       if (this.state === "FirstEstablished" || this.state === "Receiving" || this.state === "WaitingMissingFrames") {
         this.state = "Receiving";
       }
@@ -11835,7 +11833,7 @@ var TransportApi = class {
 };
 
 // src/config/version.ts
-var VERSION = "0.4.0";
+var VERSION = "0.5.0";
 export {
   AppConfig,
   BrowserRuntimeApi,

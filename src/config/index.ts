@@ -153,7 +153,6 @@ export class DataConfig {
 export interface BrowserRuntimeConfigOptions {
 	renderFps?: number;
 	cameraFps?: number;
-	decodeFrequency?: number;
 	qrWidth?: number;
 	qrHeight?: number;
 	canvasWidth?: number;
@@ -165,7 +164,6 @@ export interface BrowserRuntimeConfigOptions {
 export class BrowserRuntimeConfig {
 	public renderFps: number;
 	public cameraFps: number;
-	public decodeFrequency: number;
 	public qrWidth: number;
 	public qrHeight: number;
 	public canvasWidth: number;
@@ -176,7 +174,6 @@ export class BrowserRuntimeConfig {
 	constructor(options?: BrowserRuntimeConfigOptions) {
 		this.renderFps = options?.renderFps ?? 60;
 		this.cameraFps = options?.cameraFps ?? 60;
-		this.decodeFrequency = options?.decodeFrequency ?? 60;
 		this.qrWidth = options?.qrWidth ?? 300;
 		this.qrHeight = options?.qrHeight ?? 300;
 		this.canvasWidth = options?.canvasWidth ?? 300;
@@ -189,7 +186,6 @@ export class BrowserRuntimeConfig {
 		return new BrowserRuntimeConfig({
 			renderFps: this.renderFps,
 			cameraFps: this.cameraFps,
-			decodeFrequency: this.decodeFrequency,
 			qrWidth: this.qrWidth,
 			qrHeight: this.qrHeight,
 			canvasWidth: this.canvasWidth,

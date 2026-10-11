@@ -6,76 +6,52 @@
 [![jsDelivr hits (GitHub)](https://img.shields.io/jsdelivr/gh/hy/hi2ma-bu4/QrDataTransport)](https://www.jsdelivr.com/package/gh/hi2ma-bu4/QrDataTransport)
 [![GitHub repo size](https://img.shields.io/github/repo-size/hi2ma-bu4/QrDataTransport)](https://github.com/hi2ma-bu4/QrDataTransport)
 
-QRコードを連続表示して、文字列やバイナリデータを送受信する JavaScript ライブラリです。QRフレームの生成・解析や送受信の状態管理に加え、ブラウザではQR描画・カメラ入力も扱えます。Node.js ではブラウザ機能に依存しないフレーム処理 API を利用できます。
-
+QRコードを連続表示して、文字列やバイナリデータを高速送受信する JavaScript / TypeScript ライブラリです。WebAssembly (WASM) による高速なフレーム生成・解析・誤り訂正と、Web Worker によるマルチスレッド処理に対応しています。
 
 *QRコードはデンソーウェーブの商標です。*
 
 ## 特徴
 
-- 文字列（`string`）とバイナリ（`Uint8Array`）の送受信
-- QR Code のバージョン（1〜40）と誤り訂正レベル（L/M/Q/H）の指定
-- 任意で使用できるパリティフレーム（8・16・32単位）
-- フレーム単位のCRC検証と、全フレーム受信後のCRC検証
-- Worker による処理と、利用できない環境でのフォールバック
-- Canvas へのQR描画、ブラウザカメラからの画像入力
-- ファイル名を含むバイナリデータのパック／アンパック用ヘルパー
+- **多様なデータ形式対応**：文字列（`string`）および任意のバイナリデータ（`Uint8Array`）の送受信
+- **可変フレームサイズ自動制御**：QRコードのバージョン（1〜40）と誤り訂正レベル（L/M/Q/H）からフレームごとの純ペイロード容量を自動算出
+- **強固なパリティ復元**：任意で設定可能なパリティフレーム（Group 8/16/32単位のXORパリティ）による欠損フレームの自動補完
+- **二重のCRC保護**：個別のワイヤーフレーム単位での16-bit CRC検証に加え、全データ復元時の32-bit Overall CRC検証
+- **ノンブロッキングUI**：Web Worker によるエンコード／デコード非同期オフロードと、非対応環境での自動フォールバック
+- **完全なマルチプラットフォーム**：ブラウザ（Canvas描画・カメラ入力・リアルタイムプレビュー）および Node.js（画面・カメラ非依存のヘッドレス環境）の双方を完全サポート
+- **簡易ファイルパッキング機能**：ファイル名を含むバイナリデータのパック／アンパック用ヘルパーを標準提供
 
 ## 動作環境
 
-- JavaScript ES Modules に対応した実行環境
-- ブラウザ機能（カメラを利用する場合は `getUserMedia()` に対応したブラウザ）
-
-カメラを利用するページは、通常 HTTPS または localhost などのセキュアコンテキストで開く必要があります。
+- JavaScript ES Modules (ESM) に対応した実行環境 (Node.js 18+ / モダンブラウザ)
+- ブラウザカメラを使用する場合は `getUserMedia()` に対応した HTTPS セキュアコンテキスト（または `localhost`）
 
 ## 通信速度
 
-- **理論上の最大通信速度**：`算出中`
+- **理論上の最大通信速度**：`1.41 Mbps` (約 177.2 KB/s)
+  - **算出条件**：QR Version 40 / EC Level L（1フレームあたりの純ペイロード容量: 23,628 bits）を 60 fps（約 16.6 ms 間隔）で連続送信した場合。
+  - 100 ms 間隔（10 fps）送信時の理論最大速度は約 `236 kbps` (約 29.5 KB/s) です。
 
-
-- **観測史上最速（実測値）**：`127kbps`
-
-  観測環境:
-  * qrVersion: 35
-  * ecLevel: L
-  * intervalMs: 70ms
-  * parityMode: 8
-  * cameraFps: 60
+- **観測史上最速（実測値）**：`127 kbps`
+  - **観測環境**：
+    - `qrVersion`: 35
+    - `ecLevel`: L
+    - `intervalMs`: 70 ms
+    - `parityMode`: 8
+    - `cameraFps`: 60
 
 ## インストール
 
-GitHub リポジトリからインストールします。
+GitHub リポジトリから直接インストールします。
 
 ```sh
 npm install github:hi2ma-bu4/QrDataTransport
 ```
 
-## Node.js での利用
-
-Node.js では、ブラウザの Canvas やカメラに依存しない `DataApi` を利用して、ワイヤーフレームの生成・解析・復元を行えます。パッケージは ES Modules 形式です。
-
-```js
-import { DataApi } from "qrdatatransport";
-
-// 文字列を QR フレームに分割
-const encoded = DataApi.encodeText("こんにちは、Node.js!", 5, "m", 0);
-const wireFrames = encoded.frames.map((frame) => frame.wireBytes);
-
-// 受信したフレームからデータを復元
-const decoded = DataApi.decodeFrames(wireFrames);
-console.log(decoded.type); // "string"
-console.log(decoded.data); // "こんにちは、Node.js!"
-```
-
-バイナリデータの場合は `DataApi.encodeBytes(bytes, qrVersion, ecLevel, parityMode)` を使用します。`DataApi.decodeFrames()` には、受信したワイヤーフレームを `Uint8Array[]` として渡してください。フレームの読み取り順や不足フレームの補完は、利用側で管理する必要があります。
-
-`DataApi.generateQrMatrix()` はワイヤーフレームから QR モジュール行列を生成し、`DataApi.decodeQrImage()` は RGBA ピクセルデータからワイヤーデータを読み取ります。Node.js で画像ファイルの読み込み・QR画像の描画を行う場合は、画像や Canvas に対応する外部ライブラリを別途用意してください。
-
-`TransportApi` も利用できます。ブラウザランタイムを渡さずに使用する場合、QR の Canvas 描画やカメラ起動は行われません。送信・受信処理を Worker で実行する場合は、Node.js の `worker_threads` に対応した Worker の URL（`workerUrl`）または独自の `createWorker` を設定してください。Worker を利用できない場合の直接実行へのフォールバックも設定できます。
-
 ## 使用例
 
-### QRコードを送信する
+### 1. QRコードを送信する（ブラウザ）
+
+`TransportApi` の `startSend()` を呼び出すことで、指定された `intervalMs` ごとにQRコードフレームが自動で更新・描画されます。
 
 HTML:
 
@@ -84,7 +60,7 @@ HTML:
 <button id="stop-send" type="button">送信停止</button>
 ```
 
-JavaScript:
+JavaScript / TypeScript:
 
 ```js
 import { BrowserRuntimeApi, TransportApi } from "qrdatatransport";
@@ -92,14 +68,16 @@ import { BrowserRuntimeApi, TransportApi } from "qrdatatransport";
 const runtime = new BrowserRuntimeApi();
 const transport = new TransportApi(undefined, runtime);
 
+// 進捗イベントのリスナー登録
 transport.onSendProgress(({ index, maxIndex }) => {
-  console.log(`フレーム ${index}/${maxIndex}`);
+  console.log(`送信中: ${index} / ${maxIndex} フレーム`);
 });
 
 transport.onError((error) => {
-  console.error(error.code, error.message);
+  console.error("送信エラー:", error.code, error.message);
 });
 
+// 送信開始
 await transport.startSend("こんにちは、QrDataTransport!", {
   qrVersion: 5,
   ecLevel: "m",
@@ -109,6 +87,8 @@ await transport.startSend("こんにちは、QrDataTransport!", {
   renderOptions: {
     width: 300,
     height: 300,
+    darkColor: "#000000",
+    lightColor: "#ffffff",
   },
 });
 
@@ -117,11 +97,9 @@ document.getElementById("stop-send").addEventListener("click", () => {
 });
 ```
 
-`startSend()` には `string` または `Uint8Array` を渡せます。送信はフレームを繰り返し表示し、`stopSend()` で停止します。`intervalMs` はフレーム間隔をミリ秒で指定します。
+### 2. QRコードを受信する（ブラウザカメラ）
 
-### QRコードを受信する
-
-`startReceive()` は受信状態を初期化しますが、カメラ自体は起動しません。カメラを別途起動し、取得した RGBA ピクセルデータを `processImageFrame()` に渡します。
+`startReceive()` で受信状態を開始し、`runtime.startCamera()` でカメラキャプチャを開始して `processImageFrame()` へピクセルデータを渡します。
 
 HTML:
 
@@ -129,7 +107,7 @@ HTML:
 <canvas id="camera-preview"></canvas>
 ```
 
-JavaScript:
+JavaScript / TypeScript:
 
 ```js
 import { BrowserRuntimeApi, TransportApi } from "qrdatatransport";
@@ -137,24 +115,35 @@ import { BrowserRuntimeApi, TransportApi } from "qrdatatransport";
 const runtime = new BrowserRuntimeApi();
 const transport = new TransportApi(undefined, runtime);
 
+// フレーム毎のリアルタイム処理進捗リスナー
+transport.onFrameProcessed(({ validCount, pendingCount, totalCount, isQrDetected, bps }) => {
+  console.log(`受信状況: ${validCount}/${totalCount} 検出:${isQrDetected} 速度:${bps} bps`);
+});
+
+// 受信完了イベントのリスナー
 transport.onComplete((result) => {
   if (result.type === "string") {
-    console.log("受信した文字列:", result.data);
+    console.log("受信完了（文字列）:", result.data);
   } else {
-    console.log("受信したバイナリ:", result.data);
+    console.log("受信完了（バイナリ）:", result.data);
   }
 });
 
 transport.onWarning((warning) => {
-  console.warn(warning.code, warning.message);
+  console.warn("警告:", warning.code, warning.message);
 });
 
 transport.onError((error) => {
-  console.error(error.code, error.message);
+  console.error("エラー:", error.code, error.message);
 });
 
-await transport.startReceive();
+// 受信初期化
+await transport.startReceive({
+  maxConsecutiveCrcErrors: 16,
+  useWorker: true,
+});
 
+// カメラ起動とフレーム処理ループ
 await runtime.startCamera(
   (rgbaPixels, width, height) => {
     void transport.processImageFrame(rgbaPixels, width, height);
@@ -166,22 +155,21 @@ await runtime.startCamera(
   },
 );
 
-// 受信を終了するとき
+// 受信終了時
 // transport.stopReceive();
 ```
 
-別のQRスキャナーでワイヤーフレームを取得する場合は、`processFrame(wireBytes)` にフレームの `Uint8Array` を直接渡すこともできます。
-
-### ファイルを送受信する
+### 3. ファイルを送受信する
 
 `BrowserRuntimeApi.packFileToUint8Array()` はファイル名とファイル内容を `Uint8Array` にまとめます。送信側では、その戻り値を `startSend()` に渡します。
 
 > [!TIP]
-> これは、ファイル共有の独自実装を作成する手前を省きたい人用の簡易実装です。
+> これは、ファイル共有の独自実装を作成する手間を省きたい人用の簡易実装です。
 >
 > 実際に使用する際はご自身の環境で使用可能な圧縮ライブラリなどを使用する事を推奨します。
 
 ```js
+// 送信側
 const fileInput = document.querySelector('input[type="file"]');
 const file = fileInput.files[0];
 if (!file) throw new Error("ファイルを選択してください");
@@ -193,11 +181,8 @@ await transport.startSend(packed, {
   parityMode: 8,
   canvas: "qr-canvas",
 });
-```
 
-受信側では `onComplete()` の結果からファイル名とデータを復元できます。
-
-```js
+// 受信側
 transport.onComplete((result) => {
   if (result.type !== "Uint8Array") return;
 
@@ -213,78 +198,119 @@ transport.onComplete((result) => {
 });
 ```
 
-ファイル用ヘルパーのデータ形式は、ファイル名のUTF-8バイト長（2バイト・ビッグエンディアン）、UTF-8のファイル名、ファイル本体の順です。ファイル名のUTF-8表現は最大65,535バイトです。`Uint8Array` を直接使う場合、この形式を使う必要はありません。
+*※ファイルパッキングのバイナリフォーマット：2バイト（ビッグエンディアン）のファイル名長、UTF-8ファイル名、ファイル本体。ファイル名のUTF-8長は最大 65,535 バイトです。*
 
-## API
+## Node.js での利用
 
-### `TransportApi`
-
-送信・受信のフレーム管理を行います。
-
-| メソッド | 説明 |
-| --- | --- |
-| `startSend(data, options?)` | 文字列またはバイナリデータの送信を開始します。 |
-| `stopSend()` | 送信を停止します。 |
-| `getCurrentSendFrame()` | 現在表示対象のワイヤーフレームを返します。 |
-| `startReceive(options?)` | 受信処理を初期化します。カメラは起動しません。 |
-| `processImageFrame(pixels, width, height)` | RGBA画像からQRコードを読み取り、フレームを処理します。 |
-| `processFrame(wireBytes)` | ワイヤーフレームを直接処理します。 |
-| `stopReceive()` | 受信を停止し、接続されたランタイムのカメラも停止します。 |
-| `getState()` | 現在の送受信状態を返します。 |
-| `getConfig()` | 設定オブジェクトを返します。 |
-
-イベント登録メソッド:
-
-- `onSendProgress(callback)` — 送信フレーム番号と総フレーム数
-- `onFrameProcessed(callback)` — 受信フレーム数、保留数、QR検出状態、推定ビットレート
-- `onComplete(callback)` — 全フレームの受信と全体CRC検証が完了したときの結果
-- `onWarning(callback)` — 非致命的な警告
-- `onError(callback)` — エラー情報（コード、メッセージ、`critical`）
-
-### `BrowserRuntimeApi`
-
-ブラウザ固有のQR描画、カメラ入力、ファイルヘルパーを提供します。コンストラクタで `BrowserRuntimeConfig` またはそのオプション（`BrowserRuntimeConfigOptions`）を受け取り、各種デフォルト値（60fpsなど）を管理します。
-
-- `renderQrModuleMatrix()` — QRモジュール行列をCanvasに描画
-- `startCamera()` / `stopCamera()` — カメラ入力の開始・停止
-- `getAvailableVideoDevices()` — 利用可能なカメラデバイスを取得
-- `packFileToUint8Array(file)` — ファイル名と内容をバイナリにパック
-- `unpackUint8ArrayToFile(data)` — パックされたデータからファイル名と内容を復元
-
-### `DataApi`
-
-フレームを直接扱う低レベルAPIです。
+Node.js 環境では、ブラウザ機能（DOM / Canvas / カメラ）に依存しない `DataApi` または `TransportApi` を利用できます。
 
 ```js
 import { DataApi } from "qrdatatransport";
 
-const encoded = DataApi.encodeText("Hello", 5, "m", 0);
-// バイナリの場合: DataApi.encodeBytes(bytes, 5, "m", 0)
+// 1. 文字列からワイヤーフレーム群へエンコード
+const encoded = DataApi.encodeText("Hello Node.js Transport!", 5, "m", 0);
 const wireFrames = encoded.frames.map((frame) => frame.wireBytes);
+
+// 2. 受信したワイヤーフレーム群から復元
 const decoded = DataApi.decodeFrames(wireFrames);
+console.log(decoded.type); // "string"
+console.log(decoded.data); // "Hello Node.js Transport!"
 ```
 
-主なメソッド:
+Worker 処理を Node.js で利用する場合は、`node:worker_threads` に対応した Worker スクリプト URL (`workerUrl`) またはカスタム生成関数 (`createWorker`) を設定します。
 
-- `encodeText()` / `encodeBytes()` — 文字列／バイナリをワイヤーフレームに変換
-- `decodeFrames()` — 順番に並んだワイヤーフレーム群をデコード
-- `parseFrame()` — ワイヤーフレームを解析
-- `generateQrMatrix()` — ワイヤーフレームからQRモジュール行列を生成
-- `decodeQrImage()` — RGBA画像からQRコードのワイヤーデータを読み取り
+## 詳細 API リファレンス
 
-## 設定
+### `TransportApi`
 
-`AppConfig` でデフォルト設定を指定できます。
+送受信プロトコルのステートマシン管理およびフレーム処理を制御します。
+
+#### メソッド
+
+- `constructor(config?: AppConfig, runtime?: RuntimeApi)`
+  - 送受信の共通設定および表示・カメラ用ランタイムを渡してインスタンス化します。
+- `setRuntime(runtime?: RuntimeApi): void`
+  - 使用するランタイムAPIを設定・変更します。
+- `startSend(data: Uint8Array | string, options?: SendOptions): Promise<void>`
+  - 送信処理を開始し、タイマーでフレームを切り替え表示します。
+- `stopSend(): void`
+  - 送信を停止し、表示用キャンバスをクリアします。
+- `getCurrentSendFrame(): Uint8Array | null`
+  - 現在送信表示中のワイヤーフレームバイト配列を取得します。
+- `startReceive(options?: ReceiveOptions): Promise<void>`
+  - 受信状態を初期化（`WaitingForFirst`）します。
+- `processImageFrame(rgbaPixels: Uint8Array, width: number, height: number): Promise<void>`
+  - RGBAピクセル画像からQRコードを検出・デコードし、得られたワイヤーフレームを自動処理します。
+- `processFrame(wireBytes?: Uint8Array | null): void | Promise<void>`
+  - 生のワイヤーフレームバイト配列を直接処理します。
+- `stopReceive(): void`
+  - 受信処理を停止し、接続されているカメラを停止します。
+- `getState(): TransportState`
+  - 現在の状態（`"Idle"` | `"WaitingForFirst"` | `"FirstEstablished"` | `"Receiving"` | `"WaitingMissingFrames"` | `"OverallCrcVerification"` | `"Completed"` | `"Error"`）を取得します。
+- `getConfig(): AppConfig`
+  - 現在の設定オブジェクトを取得します。
+- `getPendingPreFirstQueueLength(): number`
+  - 先頭フレーム（First QR）受信前に一時保持されている先行フレームのキュー長を取得します。
+
+#### イベント登録
+
+- `onSendProgress(callback: (event: SendProgressEvent) => void)`: 1オリジンの送信フレームインデックス（`index`, `maxIndex`）を通知。
+- `onFrameProcessed(callback: (event: FrameProcessedEvent) => void)`: フレーム処理毎のステータス情報（`validCount`, `pendingCount`, `totalCount`, `isQrDetected`, `bps`）を通知。
+- `onComplete(callback: (result: DecodedResult) => void)`: 全フレームの受信とOverall CRC検証が成功した際のデータ（`type`, `data`）を通知。
+- `onWarning(callback: (warning: TransportWarning) => void)`: パケット置換や First CRC 変更などの警告を通知。
+- `onError(callback: (error: TransportError) => void)`: CRC不一致や上限到達などのエラーを通知。
+
+### `BrowserRuntimeApi`
+
+ブラウザ固有の Canvas 描画、`getUserMedia` カメラ制御、ファイルパッキングヘルパーを提供します。
+
+#### メソッド
+
+- `constructor(config?: BrowserRuntimeConfig | BrowserRuntimeConfigOptions)`
+- `renderQrModuleMatrix(matrix: QrModuleMatrixData, options?: RenderQrOptions): void`
+  - 2次元モジュール行列を指定キャンバスにレスポンシブ／アンチエイリアス無効でシャープに描画します。
+- `clearCanvas(canvasTarget?: HTMLCanvasElement | string): void`
+  - 指定キャンバスの描画内容をクリアします。
+- `startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>`
+  - カメラ入力を開始し、指定FPS間隔でキャプチャループを実行します。
+- `stopCamera(): void`
+  - カメラストリームとキャプチャループを停止します。
+- `getAvailableVideoDevices(): Promise<MediaDeviceInfo[]>`
+  - 利用可能なビデオ入力デバイス一覧を取得します。
+- `isWorkerSupported(): boolean`
+  - ブラウザ環境が Web Worker に対応しているか判定します。
+- `static packFileToUint8Array(file: File): Promise<Uint8Array>`
+  - ファイルオブジェクトをパッキングされた Uint8Array に変換します。
+- `static unpackUint8ArrayToFile(packed: Uint8Array): { name: string; data: Uint8Array }`
+  - パッキングされた Uint8Array からファイル名とデータを復元します。
+
+### `DataApi`
+
+プロトコルの基本変換を行うステートレスな低レベル API です。
+
+- `static encodeText(text: string, qrVersion?: number, ecLevel?: QrEcLevel, parityMode?: number): EncodeResult`
+- `static encodeBytes(data: Uint8Array, qrVersion?: number, ecLevel?: QrEcLevel, parityMode?: number): EncodeResult`
+- `static parseFrame(wireBytes: Uint8Array, knownTotalQrCount?: number, knownFirstFrameCrc?: number, knownParityMode?: number): FrameMetadata`
+- `static decodeFrames(wireFrames: Uint8Array[]): DecodedResult`
+- `static generateQrMatrix(wireBytes: Uint8Array, qrVersion: number, ecLevel: QrEcLevel): QrModuleMatrix`
+- `static decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Uint8Array`
+
+---
+
+## 設定クラスとオプション
+
+すべての設定は `AppConfig` または独立した設定クラスで個別に管理・カスタマイズできます。
 
 ```js
-import { AppConfig, BrowserRuntimeApi, TransportApi } from "qrdatatransport";
+import { AppConfig } from "qrdatatransport";
 
 const config = new AppConfig({
   transport: {
-    intervalMs: 100,
-    useWorker: true,
     maxConsecutiveCrcErrors: 16,
     maxPendingFramesBeforeFirst: 256,
+    useWorker: true,
+    intervalMs: 100,
+    timeout: 30000,
   },
   data: {
     qrVersion: 5,
@@ -294,34 +320,59 @@ const config = new AppConfig({
   browserRuntime: {
     cameraFps: 60,
     renderFps: 60,
-    decodeFrequency: 60,
+    qrWidth: 300,
+    qrHeight: 300,
+    canvasWidth: 300,
+    canvasHeight: 300,
     facingMode: "environment",
   },
 });
-
-const runtime = new BrowserRuntimeApi(config.browserRuntime);
-const transport = new TransportApi(config, runtime);
 ```
 
-主な設定項目:
+### 項目一覧
 
-- `transport.useWorker` — Workerを利用するか（既定値 `true`）
-- `transport.maxConsecutiveCrcErrors` — 連続CRCエラーの上限（既定値 `16`、`0` で上限なし）
-- `transport.maxPendingFramesBeforeFirst` — 先頭フレーム受信前に一時保留するフレーム数の上限（既定値 `256`）
-- `data.qrVersion` — QR Code バージョン（1〜40）
-- `data.ecLevel` — 誤り訂正レベル（`"l"` / `"m"` / `"q"` / `"h"`）
-- `data.parityMode` — パリティ設定（`0` / `8` / `16` / `32`）
-- `browserRuntime.facingMode` — カメラの向きの指定（既定値 `"environment"`）
+| 設定グループ | プロパティ | 型 | 既定値 | 説明 |
+| --- | --- | --- | --- | --- |
+| **Transport** | `maxConsecutiveCrcErrors` | `number` | `16` | 連続CRCエラー許容上限（`0` で無制限） |
+| | `maxPendingFramesBeforeFirst` | `number` | `256` | 先頭フレーム受信前の先行フレーム一時保持上限 |
+| | `useWorker` | `boolean` | `true` | Web Worker によるバックグラウンド処理の利用 |
+| | `intervalMs` | `number` | `100` | 送信時のフレーム表示切り替え間隔（ミリ秒） |
+| | `workerUrl` | `string \| URL` | `undefined` | カスタム Worker スクリプトの URL |
+| | `timeout` | `number` | `30000` | Worker タスク応答のタイムアウト（ミリ秒） |
+| **Data** | `qrVersion` | `number` | `5` | QR Code バージョン（`1` 〜 `40`） |
+| | `ecLevel` | `"l" \| "m" \| "q" \| "h"` | `"m"` | 誤り訂正レベル |
+| | `parityMode` | `0 \| 8 \| 16 \| 32` | `0` | パリティフレーム挿入単位（`0` で無効） |
+| **BrowserRuntime** | `cameraFps` | `number` | `60` | カメラキャプチャのターゲット FPS |
+| | `renderFps` | `number` | `60` | QRレンダリングのターゲット FPS |
+| | `qrWidth` / `qrHeight` | `number` | `300` | QR描画サイズのデフォルト寸法（ピクセル） |
+| | `canvasWidth` / `canvasHeight` | `number` | `300` | Canvas自体のデフォルト寸法（ピクセル） |
+| | `facingMode` | `string` | `"environment"` | カメラのデフォルト向き（`"environment"` / `"user"`） |
+| | `deviceId` | `string` | `undefined` | 使用するカメラの固有デバイスID |
 
-## 開発
+---
 
-ビルドには Node.js/npm に加え、Rustツールチェーン、`wasm32-wasip1` ターゲット、`cargo-component`、`jco` が必要です。
+## 開発とテスト
+
+本ライブラリのコアモジュールは Rust で記述され WebAssembly (WASM) へコンパイルされています。
+
+### ビルド環境のセットアップ
+
+1. Node.js (20+) および Rust ツールチェーンのインストール
+2. Target および Cargo ツールの追加:
+   ```sh
+   rustup target add wasm32-wasip1
+   cargo install cargo-component
+   ```
+
+### コマンド
 
 ```sh
+# 依存関係のインストール
 npm install
+
+# WASMビルド、TypeScript型チェック、配布ファイルの生成
 npm run build
+
+# WASMユニットテストおよび Node.js テストの実行
 npm test
 ```
-
-- `npm run build` — Rust/WASMプロトコルコンポーネントのビルド、WASMの変換、TypeScriptの型チェック、配布用JavaScript・型定義ファイルの生成
-- `npm test` — WASMおよびNode.jsのテストを実行

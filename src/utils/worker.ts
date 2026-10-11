@@ -587,9 +587,9 @@ export async function handleWorkerMessage(msg: WorkerRequestMessage): Promise<Wo
 
 		switch (msg.type) {
 			case "parseFrame": {
-				const { wireBytes, knownTotalQrCount, knownFirstFrameCrc } = msg.payload;
+				const { wireBytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode } = msg.payload;
 
-				result = DataApi.parseFrame(wireBytes instanceof Uint8Array ? wireBytes : new Uint8Array(wireBytes), knownTotalQrCount, knownFirstFrameCrc);
+				result = DataApi.parseFrame(wireBytes instanceof Uint8Array ? wireBytes : new Uint8Array(wireBytes), knownTotalQrCount, knownFirstFrameCrc, knownParityMode);
 				break;
 			}
 

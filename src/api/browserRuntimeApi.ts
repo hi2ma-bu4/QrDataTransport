@@ -97,6 +97,9 @@ export class BrowserRuntimeApi implements RuntimeApi {
 	}
 
 	private resolveCanvas(canvasTarget?: HTMLCanvasElement | string): HTMLCanvasElement | null {
+		if (canvasTarget && typeof canvasTarget !== "string") {
+			return canvasTarget as HTMLCanvasElement;
+		}
 		if (typeof document === "undefined") {
 			return null;
 		}
@@ -109,9 +112,6 @@ export class BrowserRuntimeApi implements RuntimeApi {
 				return el;
 			}
 			return document.querySelector<HTMLCanvasElement>(canvasTarget);
-		}
-		if (canvasTarget instanceof HTMLCanvasElement) {
-			return canvasTarget;
 		}
 		return null;
 	}
@@ -127,8 +127,8 @@ export class BrowserRuntimeApi implements RuntimeApi {
 			return;
 		}
 
-		const canvasWidth = options?.width ?? this.config.canvasWidth ?? canvas.width ?? 300;
-		const canvasHeight = options?.height ?? this.config.canvasHeight ?? canvas.height ?? 300;
+		const canvasWidth = options?.width ?? this.config.qrWidth ?? this.config.canvasWidth ?? canvas.width ?? 300;
+		const canvasHeight = options?.height ?? this.config.qrHeight ?? this.config.canvasHeight ?? canvas.height ?? 300;
 		canvas.width = canvasWidth;
 		canvas.height = canvasHeight;
 

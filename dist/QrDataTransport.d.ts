@@ -242,7 +242,6 @@ declare class DataConfig {
 interface BrowserRuntimeConfigOptions {
     renderFps?: number;
     cameraFps?: number;
-    decodeFrequency?: number;
     qrWidth?: number;
     qrHeight?: number;
     canvasWidth?: number;
@@ -253,7 +252,6 @@ interface BrowserRuntimeConfigOptions {
 declare class BrowserRuntimeConfig {
     renderFps: number;
     cameraFps: number;
-    decodeFrequency: number;
     qrWidth: number;
     qrHeight: number;
     canvasWidth: number;
@@ -424,7 +422,7 @@ declare class TransportApi {
     private knownFirstFrameCrc?;
     private consecutiveCrcErrors;
     private receiveStartTime;
-    private totalReceivedWireBits;
+    private totalReceivedPayloadBits;
     private lastQrDetected;
     constructor(config?: AppConfig, runtime?: RuntimeApi);
     setRuntime(runtime?: RuntimeApi): void;
