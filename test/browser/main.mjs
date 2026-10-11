@@ -44,8 +44,10 @@ const tabReceiver = document.getElementById("tab-receiver");
 const panelSender = document.getElementById("panel-sender");
 const panelReceiver = document.getElementById("panel-receiver");
 
+const config = new AppConfig({});
+
 const runtime = new BrowserRuntimeApi();
-const transport = new TransportApi(undefined, runtime);
+const transport = new TransportApi(config, runtime);
 
 // テストページでコンソールからユーザーが触れるように設定
 window.AppConfig = AppConfig;

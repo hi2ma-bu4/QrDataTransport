@@ -472,5 +472,5 @@ declare class TransportApi {
 
 declare const VERSION: string;
 
-export { AppConfig, BrowserRuntimeApi, BrowserRuntimeConfig, DataApi, DataConfig, TransportApi, TransportConfig, WorkerClient, handleWorkerMessage, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener, VERSION as version };
+export { AppConfig, BrowserRuntimeApi, BrowserRuntimeConfig, DataApi, DataConfig, ParityMode, TransportApi, TransportConfig, WorkerClient, handleWorkerMessage, snowsQrDataTransportProtocol_d as protocol, setupWorkerSelfListener, VERSION as version };
 export type { CameraOptions, DecodedResult, ErrorCode, ReceiveOptions, RenderQrOptions, RuntimeApi, SendOptions, TransportError, TransportState, TransportWarning, WarningCode, WorkerClientOptions };

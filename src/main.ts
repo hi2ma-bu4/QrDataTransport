@@ -4,6 +4,6 @@ export { BrowserRuntimeApi, type CameraOptions, type RenderQrOptions, type Runti
 export { DataApi, type DecodedResult } from "./api/dataApi";
 export { TransportApi, type ErrorCode, type ReceiveOptions, type SendOptions, type TransportError, type TransportState, type TransportWarning, type WarningCode } from "./api/transportApi";
 
-export { AppConfig, BrowserRuntimeConfig, DataConfig, TransportConfig } from "./config/index";
+export { AppConfig, BrowserRuntimeConfig, DataConfig, ParityMode, TransportConfig } from "./config/index";
 export { VERSION as version } from "./config/version";
 export { handleWorkerMessage, setupWorkerSelfListener, WorkerClient, type WorkerClientOptions } from "./utils/worker";

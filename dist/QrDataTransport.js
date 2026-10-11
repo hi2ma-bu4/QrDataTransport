@@ -10533,6 +10533,13 @@ var DataApi = class {
 };
 
 // src/config/index.ts
+var ParityMode = /* @__PURE__ */ ((ParityMode3) => {
+  ParityMode3[ParityMode3["None"] = 0] = "None";
+  ParityMode3[ParityMode3["Group8"] = 8] = "Group8";
+  ParityMode3[ParityMode3["Group16"] = 16] = "Group16";
+  ParityMode3[ParityMode3["Group32"] = 32] = "Group32";
+  return ParityMode3;
+})(ParityMode || {});
 var TransportConfig = class _TransportConfig {
   /**
    * Maximum consecutive CRC errors before declaring a critical error.
@@ -11805,13 +11812,14 @@ var TransportApi = class {
 };
 
 // src/config/version.ts
-var VERSION = "0.3.4";
+var VERSION = "0.3.5";
 export {
   AppConfig,
   BrowserRuntimeApi,
   BrowserRuntimeConfig,
   DataApi,
   DataConfig,
+  ParityMode,
   TransportApi,
   TransportConfig,
   WorkerClient,
