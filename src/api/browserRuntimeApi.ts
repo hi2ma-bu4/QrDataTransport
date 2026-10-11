@@ -1,3 +1,5 @@
+import { BrowserRuntimeConfig, type BrowserRuntimeConfigOptions } from "../config/index";
+
 export interface RenderQrOptions {
 	canvas?: HTMLCanvasElement | string;
 	width?: number;
@@ -40,9 +42,21 @@ export class BrowserRuntimeApi implements RuntimeApi {
 	static readonly HEADER_SIZE = 2;
 	static readonly MAX_FILENAME_LENGTH = 0xffff;
 
+	public config: BrowserRuntimeConfig;
+	public readonly initialOptions?: BrowserRuntimeConfigOptions;
+
 	private cameraStream: MediaStream | null = null;
 	private cameraVideo: HTMLVideoElement | null = null;
 	private cameraAnimationId: number | null = null;
+
+	constructor(config?: BrowserRuntimeConfig | BrowserRuntimeConfigOptions) {
+		if (config instanceof BrowserRuntimeConfig) {
+			this.config = config;
+		} else {
+			this.initialOptions = config;
+			this.config = new BrowserRuntimeConfig(config);
+		}
+	}
 
 	static async packFileToUint8Array(file: File): Promise<Uint8Array> {
 		const filenameEncoder = new TextEncoder();
@@ -113,8 +127,8 @@ export class BrowserRuntimeApi implements RuntimeApi {
 			return;
 		}
 
-		const canvasWidth = options?.width ?? canvas.width ?? 300;
-		const canvasHeight = options?.height ?? canvas.height ?? 300;
+		const canvasWidth = options?.width ?? this.config.canvasWidth ?? canvas.width ?? 300;
+		const canvasHeight = options?.height ?? this.config.canvasHeight ?? canvas.height ?? 300;
 		canvas.width = canvasWidth;
 		canvas.height = canvasHeight;
 
@@ -177,14 +191,18 @@ export class BrowserRuntimeApi implements RuntimeApi {
 
 		this.stopCamera();
 
-		const facingMode = options?.facingMode ?? "environment";
+		const facingMode = options?.facingMode ?? this.config.facingMode;
+		const deviceId = options?.deviceId ?? this.config.deviceId;
+		const reqWidth = options?.width ?? this.config.canvasWidth;
+		const reqHeight = options?.height ?? this.config.canvasHeight;
+
 		const videoConstraints: MediaTrackConstraints = {
-			width: options?.width ? { ideal: options.width } : undefined,
-			height: options?.height ? { ideal: options.height } : undefined,
+			width: reqWidth ? { ideal: reqWidth } : undefined,
+			height: reqHeight ? { ideal: reqHeight } : undefined,
 		};
 
-		if (options?.deviceId) {
-			videoConstraints.deviceId = { exact: options.deviceId };
+		if (deviceId) {
+			videoConstraints.deviceId = { exact: deviceId };
 		} else if (facingMode) {
 			videoConstraints.facingMode = { ideal: facingMode };
 		}
@@ -219,7 +237,7 @@ export class BrowserRuntimeApi implements RuntimeApi {
 		const canvas = document.createElement("canvas");
 		const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-		const fps = options?.fps && options.fps > 0 ? options.fps : 30;
+		const fps = options?.fps && options.fps > 0 ? options.fps : this.config.cameraFps > 0 ? this.config.cameraFps : 60;
 		const intervalMs = 1000 / fps;
 		let lastFrameTime = 0;
 

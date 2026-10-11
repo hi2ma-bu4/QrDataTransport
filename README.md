@@ -162,7 +162,7 @@ await runtime.startCamera(
   {
     previewCanvas: "camera-preview",
     facingMode: "environment",
-    fps: 30,
+    fps: 60,
   },
 );
 
@@ -243,7 +243,7 @@ transport.onComplete((result) => {
 
 ### `BrowserRuntimeApi`
 
-ブラウザ固有のQR描画、カメラ入力、ファイルヘルパーを提供します。
+ブラウザ固有のQR描画、カメラ入力、ファイルヘルパーを提供します。コンストラクタで `BrowserRuntimeConfig` またはそのオプション（`BrowserRuntimeConfigOptions`）を受け取り、各種デフォルト値（60fpsなど）を管理します。
 
 - `renderQrModuleMatrix()` — QRモジュール行列をCanvasに描画
 - `startCamera()` / `stopCamera()` — カメラ入力の開始・停止
@@ -292,14 +292,15 @@ const config = new AppConfig({
     parityMode: 0,
   },
   browserRuntime: {
-    cameraFps: 30,
-    renderFps: 10,
-    decodeFrequency: 10,
+    cameraFps: 60,
+    renderFps: 60,
+    decodeFrequency: 60,
     facingMode: "environment",
   },
 });
 
-const transport = new TransportApi(config, new BrowserRuntimeApi());
+const runtime = new BrowserRuntimeApi(config.browserRuntime);
+const transport = new TransportApi(config, runtime);
 ```
 
 主な設定項目:

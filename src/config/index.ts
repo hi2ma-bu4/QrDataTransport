@@ -174,9 +174,9 @@ export class BrowserRuntimeConfig {
 	public deviceId?: string;
 
 	constructor(options?: BrowserRuntimeConfigOptions) {
-		this.renderFps = options?.renderFps ?? 10;
-		this.cameraFps = options?.cameraFps ?? 30;
-		this.decodeFrequency = options?.decodeFrequency ?? 10;
+		this.renderFps = options?.renderFps ?? 60;
+		this.cameraFps = options?.cameraFps ?? 60;
+		this.decodeFrequency = options?.decodeFrequency ?? 60;
 		this.qrWidth = options?.qrWidth ?? 300;
 		this.qrHeight = options?.qrHeight ?? 300;
 		this.canvasWidth = options?.canvasWidth ?? 300;

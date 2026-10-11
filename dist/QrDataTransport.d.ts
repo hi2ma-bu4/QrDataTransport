@@ -90,94 +90,6 @@ declare namespace snowsQrDataTransportProtocol_d {
   export type { snowsQrDataTransportProtocol_d_DataType as DataType, snowsQrDataTransportProtocol_d_DecodedPayload as DecodedPayload, snowsQrDataTransportProtocol_d_DecodedPayloadBytes as DecodedPayloadBytes, snowsQrDataTransportProtocol_d_DecodedPayloadText as DecodedPayloadText, snowsQrDataTransportProtocol_d_EncodeResult as EncodeResult, snowsQrDataTransportProtocol_d_EncodedFrameOutput as EncodedFrameOutput, snowsQrDataTransportProtocol_d_FrameMetadata as FrameMetadata, snowsQrDataTransportProtocol_d_QrEcLevel as QrEcLevel, snowsQrDataTransportProtocol_d_QrModuleMatrix as QrModuleMatrix, snowsQrDataTransportProtocol_d_StringMode as StringMode };
 }
 
-interface RenderQrOptions {
-    canvas?: HTMLCanvasElement | string;
-    width?: number;
-    height?: number;
-    darkColor?: string;
-    lightColor?: string;
-}
-interface CameraOptions {
-    deviceId?: string;
-    facingMode?: "environment" | "user" | string;
-    fps?: number;
-    width?: number;
-    height?: number;
-    isManual?: boolean;
-    previewCanvas?: HTMLCanvasElement | string;
-    drawOverlay?: (ctx: CanvasRenderingContext2D, width: number, height: number) => void;
-}
-interface QrModuleMatrixData {
-    width: number;
-    height: number;
-    modules: Uint8Array;
-}
-/**
- * Runtime API interface for display rendering and camera operations.
- * Allows TransportApi to remain runtime-agnostic.
- */
-interface RuntimeApi {
-    renderQrModuleMatrix(matrix: QrModuleMatrixData, options?: RenderQrOptions): void;
-    clearCanvas(canvas?: HTMLCanvasElement | string): void;
-    startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
-    stopCamera(): void;
-    isWorkerSupported(): boolean;
-    getAvailableVideoDevices?(): Promise<MediaDeviceInfo[]>;
-}
-declare class BrowserRuntimeApi implements RuntimeApi {
-    static readonly HEADER_SIZE = 2;
-    static readonly MAX_FILENAME_LENGTH = 65535;
-    private cameraStream;
-    private cameraVideo;
-    private cameraAnimationId;
-    static packFileToUint8Array(file: File): Promise<Uint8Array>;
-    static unpackUint8ArrayToFile(packed: Uint8Array): {
-        name: string;
-        data: Uint8Array;
-    };
-    private resolveCanvas;
-    renderQrModuleMatrix(matrix: QrModuleMatrixData, options?: RenderQrOptions): void;
-    clearCanvas(canvasTarget?: HTMLCanvasElement | string): void;
-    getAvailableVideoDevices(): Promise<MediaDeviceInfo[]>;
-    startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
-    stopCamera(): void;
-    isWorkerSupported(): boolean;
-}
-
-interface DecodedResult {
-    type: "Uint8Array" | "string";
-    data: Uint8Array | string;
-}
-declare class DataApi {
-    /**
-     * Encodes raw bytes into wire frames using WASM protocol core.
-     * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
-     */
-    static encodeBytes(data: Uint8Array, qrVersion?: number, ecLevel?: QrEcLevel, parityMode?: number): EncodeResult;
-    /**
-     * Encodes text into wire frames using WASM protocol core.
-     * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
-     */
-    static encodeText(text: string, qrVersion?: number, ecLevel?: QrEcLevel, parityMode?: number): EncodeResult;
-    /**
-     * Parses a single wire frame and verifies its CRC.
-     */
-    static parseFrame(wireBytes: Uint8Array, knownTotalQrCount?: number, knownFirstFrameCrc?: number, knownParityMode?: number): FrameMetadata;
-    /**
-     * Decodes a complete list of wire frames and returns the payload along with its type.
-     * Returns { type: "Uint8Array" | "string", data: Uint8Array | string } according to Spec v8.
-     */
-    static decodeFrames(wireFrames: Uint8Array[]): DecodedResult;
-    /**
-     * Generates a binary QR module matrix using qrcodegen via WASM.
-     */
-    static generateQrMatrix(wireBytes: Uint8Array, qrVersion: number, ecLevel: QrEcLevel): QrModuleMatrix;
-    /**
-     * Decodes QR code image pixels (RGBA) to wire bytes using rxing via WASM.
-     */
-    static decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Uint8Array;
-}
-
 type WorkerRequestType = "parseFrame" | "decodeFrames" | "encodeBytes" | "encodeText" | "decodeQrImage" | "__QRDT_WORKER_PING__" | "__QRDT_WORKER_READY__";
 interface WorkerRequestMessage {
     id: string;
@@ -362,6 +274,97 @@ declare class AppConfig {
     browserRuntime: BrowserRuntimeConfig;
     constructor(options?: UnifiedConfigOptions);
     clone(): AppConfig;
+}
+
+interface RenderQrOptions {
+    canvas?: HTMLCanvasElement | string;
+    width?: number;
+    height?: number;
+    darkColor?: string;
+    lightColor?: string;
+}
+interface CameraOptions {
+    deviceId?: string;
+    facingMode?: "environment" | "user" | string;
+    fps?: number;
+    width?: number;
+    height?: number;
+    isManual?: boolean;
+    previewCanvas?: HTMLCanvasElement | string;
+    drawOverlay?: (ctx: CanvasRenderingContext2D, width: number, height: number) => void;
+}
+interface QrModuleMatrixData {
+    width: number;
+    height: number;
+    modules: Uint8Array;
+}
+/**
+ * Runtime API interface for display rendering and camera operations.
+ * Allows TransportApi to remain runtime-agnostic.
+ */
+interface RuntimeApi {
+    renderQrModuleMatrix(matrix: QrModuleMatrixData, options?: RenderQrOptions): void;
+    clearCanvas(canvas?: HTMLCanvasElement | string): void;
+    startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
+    stopCamera(): void;
+    isWorkerSupported(): boolean;
+    getAvailableVideoDevices?(): Promise<MediaDeviceInfo[]>;
+}
+declare class BrowserRuntimeApi implements RuntimeApi {
+    static readonly HEADER_SIZE = 2;
+    static readonly MAX_FILENAME_LENGTH = 65535;
+    config: BrowserRuntimeConfig;
+    readonly initialOptions?: BrowserRuntimeConfigOptions;
+    private cameraStream;
+    private cameraVideo;
+    private cameraAnimationId;
+    constructor(config?: BrowserRuntimeConfig | BrowserRuntimeConfigOptions);
+    static packFileToUint8Array(file: File): Promise<Uint8Array>;
+    static unpackUint8ArrayToFile(packed: Uint8Array): {
+        name: string;
+        data: Uint8Array;
+    };
+    private resolveCanvas;
+    renderQrModuleMatrix(matrix: QrModuleMatrixData, options?: RenderQrOptions): void;
+    clearCanvas(canvasTarget?: HTMLCanvasElement | string): void;
+    getAvailableVideoDevices(): Promise<MediaDeviceInfo[]>;
+    startCamera(onFrame: (rgbaPixels: Uint8Array, width: number, height: number) => void, options?: CameraOptions): Promise<void>;
+    stopCamera(): void;
+    isWorkerSupported(): boolean;
+}
+
+interface DecodedResult {
+    type: "Uint8Array" | "string";
+    data: Uint8Array | string;
+}
+declare class DataApi {
+    /**
+     * Encodes raw bytes into wire frames using WASM protocol core.
+     * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
+     */
+    static encodeBytes(data: Uint8Array, qrVersion?: number, ecLevel?: QrEcLevel, parityMode?: number): EncodeResult;
+    /**
+     * Encodes text into wire frames using WASM protocol core.
+     * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
+     */
+    static encodeText(text: string, qrVersion?: number, ecLevel?: QrEcLevel, parityMode?: number): EncodeResult;
+    /**
+     * Parses a single wire frame and verifies its CRC.
+     */
+    static parseFrame(wireBytes: Uint8Array, knownTotalQrCount?: number, knownFirstFrameCrc?: number, knownParityMode?: number): FrameMetadata;
+    /**
+     * Decodes a complete list of wire frames and returns the payload along with its type.
+     * Returns { type: "Uint8Array" | "string", data: Uint8Array | string } according to Spec v8.
+     */
+    static decodeFrames(wireFrames: Uint8Array[]): DecodedResult;
+    /**
+     * Generates a binary QR module matrix using qrcodegen via WASM.
+     */
+    static generateQrMatrix(wireBytes: Uint8Array, qrVersion: number, ecLevel: QrEcLevel): QrModuleMatrix;
+    /**
+     * Decodes QR code image pixels (RGBA) to wire bytes using rxing via WASM.
+     */
+    static decodeQrImage(rgbaPixels: Uint8Array, width: number, height: number): Uint8Array;
 }
 
 type TransportState = "Idle" | "WaitingForFirst" | "FirstEstablished" | "Receiving" | "WaitingMissingFrames" | "OverallCrcVerification" | "Completed" | "Error";

@@ -1,7 +1,7 @@
-import { AppConfig, ParityMode } from "../config/index";
+import { AppConfig, BrowserRuntimeConfig, ParityMode } from "../config/index";
 import { WorkerClient } from "../utils/worker";
 import type { FrameMetadata } from "../wasm/interfaces/snows-qr-data-transport-protocol";
-import type { RenderQrOptions, RuntimeApi } from "./browserRuntimeApi";
+import { BrowserRuntimeApi, type RenderQrOptions, type RuntimeApi } from "./browserRuntimeApi";
 import { DataApi, type DecodedResult } from "./dataApi";
 
 export type TransportState = "Idle" | "WaitingForFirst" | "FirstEstablished" | "Receiving" | "WaitingMissingFrames" | "OverallCrcVerification" | "Completed" | "Error";
@@ -81,11 +81,22 @@ export class TransportApi {
 
 	constructor(config?: AppConfig, runtime?: RuntimeApi) {
 		this.config = config ? config.clone() : new AppConfig();
-		this.runtime = runtime;
+		this.setRuntime(runtime);
 	}
 
 	public setRuntime(runtime?: RuntimeApi): void {
 		this.runtime = runtime;
+		if (this.runtime && this.runtime instanceof BrowserRuntimeApi) {
+			if (this.runtime.initialOptions) {
+				// Constructor options take lower precedence than transport's config.browserRuntime
+				this.runtime.config = new BrowserRuntimeConfig({
+					...this.config.browserRuntime,
+					...this.runtime.initialOptions,
+				});
+			} else {
+				this.runtime.config = this.config.browserRuntime;
+			}
+		}
 	}
 
 	public getConfig(): AppConfig {

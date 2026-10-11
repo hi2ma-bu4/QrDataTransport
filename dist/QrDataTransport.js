@@ -10204,212 +10204,6 @@ var protocol = {
   parseFrame
 };
 
-// src/api/browserRuntimeApi.ts
-var BrowserRuntimeApi = class {
-  static HEADER_SIZE = 2;
-  static MAX_FILENAME_LENGTH = 65535;
-  cameraStream = null;
-  cameraVideo = null;
-  cameraAnimationId = null;
-  static async packFileToUint8Array(file) {
-    const filenameEncoder = new TextEncoder();
-    const filename = filenameEncoder.encode(file.name);
-    if (filename.length > this.MAX_FILENAME_LENGTH) {
-      throw new RangeError(`The filename exceeds ${this.MAX_FILENAME_LENGTH} bytes.`);
-    }
-    const fileData = new Uint8Array(await file.arrayBuffer());
-    const result = new Uint8Array(this.HEADER_SIZE + filename.length + fileData.length);
-    new DataView(result.buffer).setUint16(0, filename.length, false);
-    result.set(filename, this.HEADER_SIZE);
-    result.set(fileData, this.HEADER_SIZE + filename.length);
-    return result;
-  }
-  static unpackUint8ArrayToFile(packed) {
-    if (packed.length < this.HEADER_SIZE) {
-      throw new RangeError("Data is too short to contain a valid header.");
-    }
-    const filenameLength = new DataView(packed.buffer, packed.byteOffset, this.HEADER_SIZE).getUint16(0, false);
-    if (filenameLength > packed.length - this.HEADER_SIZE) {
-      throw new RangeError("Filename length exceeds the available data.");
-    }
-    const filenameEnd = this.HEADER_SIZE + filenameLength;
-    const filenameDecoder = new TextDecoder("utf-8", { fatal: true });
-    const name = filenameDecoder.decode(packed.subarray(this.HEADER_SIZE, filenameEnd));
-    const data = packed.subarray(filenameEnd);
-    return { name, data };
-  }
-  resolveCanvas(canvasTarget) {
-    if (typeof document === "undefined") {
-      return null;
-    }
-    if (!canvasTarget) {
-      return document.querySelector("canvas");
-    }
-    if (typeof canvasTarget === "string") {
-      const el = document.getElementById(canvasTarget);
-      if (el && el instanceof HTMLCanvasElement) {
-        return el;
-      }
-      return document.querySelector(canvasTarget);
-    }
-    if (canvasTarget instanceof HTMLCanvasElement) {
-      return canvasTarget;
-    }
-    return null;
-  }
-  renderQrModuleMatrix(matrix, options) {
-    const canvas = this.resolveCanvas(options?.canvas);
-    if (!canvas) {
-      return;
-    }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      return;
-    }
-    const canvasWidth = options?.width ?? canvas.width ?? 300;
-    const canvasHeight = options?.height ?? canvas.height ?? 300;
-    canvas.width = canvasWidth;
-    canvas.height = canvasHeight;
-    const { width, height, modules } = matrix;
-    if (width <= 0 || height <= 0 || modules.length < width * height) {
-      return;
-    }
-    const darkColor = options?.darkColor ?? "#000000";
-    const lightColor = options?.lightColor ?? "#FFFFFF";
-    ctx.fillStyle = lightColor;
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-    ctx.imageSmoothingEnabled = false;
-    if ("mozImageSmoothingEnabled" in ctx) ctx.mozImageSmoothingEnabled = false;
-    if ("webkitImageSmoothingEnabled" in ctx) ctx.webkitImageSmoothingEnabled = false;
-    ctx.fillStyle = darkColor;
-    for (let y = 0; y < height; y++) {
-      const startY = Math.round(y * canvasHeight / height);
-      const endY = Math.round((y + 1) * canvasHeight / height);
-      const h = endY - startY;
-      for (let x = 0; x < width; x++) {
-        if (modules[y * width + x] === 1) {
-          const startX = Math.round(x * canvasWidth / width);
-          const endX = Math.round((x + 1) * canvasWidth / width);
-          const w = endX - startX;
-          ctx.fillRect(startX, startY, w, h);
-        }
-      }
-    }
-  }
-  clearCanvas(canvasTarget) {
-    const canvas = this.resolveCanvas(canvasTarget);
-    if (!canvas) {
-      return;
-    }
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
-  }
-  async getAvailableVideoDevices() {
-    if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-      return [];
-    }
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    return devices.filter((device) => device.kind === "videoinput");
-  }
-  async startCamera(onFrame, options) {
-    if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      throw new Error("Camera API (navigator.mediaDevices.getUserMedia) is not available in this environment");
-    }
-    this.stopCamera();
-    const facingMode = options?.facingMode ?? "environment";
-    const videoConstraints = {
-      width: options?.width ? { ideal: options.width } : void 0,
-      height: options?.height ? { ideal: options.height } : void 0
-    };
-    if (options?.deviceId) {
-      videoConstraints.deviceId = { exact: options.deviceId };
-    } else if (facingMode) {
-      videoConstraints.facingMode = { ideal: facingMode };
-    }
-    const constraints = {
-      video: videoConstraints
-    };
-    this.cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-    if (options?.isManual ?? true) {
-      const track = this.cameraStream.getVideoTracks()[0];
-      if (track) {
-        try {
-          await track.applyConstraints({
-            focusMode: { ideal: "manual" },
-            exposureMode: { ideal: "manual" },
-            whiteBalanceMode: { ideal: "manual" }
-          });
-        } catch {
-        }
-      }
-    }
-    this.cameraVideo = document.createElement("video");
-    this.cameraVideo.srcObject = this.cameraStream;
-    this.cameraVideo.setAttribute("playsinline", "true");
-    await this.cameraVideo.play();
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    const fps = options?.fps && options.fps > 0 ? options.fps : 30;
-    const intervalMs = 1e3 / fps;
-    let lastFrameTime = 0;
-    const captureLoop = (now2) => {
-      if (!this.cameraVideo || !this.cameraStream) {
-        return;
-      }
-      if (now2 - lastFrameTime >= intervalMs) {
-        lastFrameTime = now2;
-        const vWidth = this.cameraVideo.videoWidth;
-        const vHeight = this.cameraVideo.videoHeight;
-        if (vWidth > 0 && vHeight > 0 && ctx) {
-          canvas.width = vWidth;
-          canvas.height = vHeight;
-          ctx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
-          const imgData = ctx.getImageData(0, 0, vWidth, vHeight);
-          if (options?.previewCanvas) {
-            const pCanvas = this.resolveCanvas(options.previewCanvas);
-            if (pCanvas) {
-              const pCtx = pCanvas.getContext("2d");
-              if (pCtx) {
-                if (pCanvas.width !== vWidth) pCanvas.width = vWidth;
-                if (pCanvas.height !== vHeight) pCanvas.height = vHeight;
-                pCtx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
-                if (options.drawOverlay) {
-                  options.drawOverlay(pCtx, vWidth, vHeight);
-                }
-              }
-            }
-          }
-          onFrame(new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength), vWidth, vHeight);
-        }
-      }
-      this.cameraAnimationId = requestAnimationFrame(captureLoop);
-    };
-    this.cameraAnimationId = requestAnimationFrame(captureLoop);
-  }
-  stopCamera() {
-    if (this.cameraAnimationId !== null && typeof cancelAnimationFrame !== "undefined") {
-      cancelAnimationFrame(this.cameraAnimationId);
-      this.cameraAnimationId = null;
-    }
-    if (this.cameraStream) {
-      for (const track of this.cameraStream.getTracks()) {
-        track.stop();
-      }
-      this.cameraStream = null;
-    }
-    if (this.cameraVideo) {
-      this.cameraVideo.pause();
-      this.cameraVideo.srcObject = null;
-      this.cameraVideo = null;
-    }
-  }
-  isWorkerSupported() {
-    return typeof Worker !== "undefined";
-  }
-};
-
 // src/utils/qrCapacity.ts
 var ECC_CODEWORDS_PER_BLOCK = [
   [0, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
@@ -10459,78 +10253,6 @@ function calculateMaxFrameBits(qrVersion, ecLevel) {
   const segmentHeaderBits = version < 10 ? 12 : 20;
   return Math.max(1, totalDataBits - segmentHeaderBits);
 }
-
-// src/api/dataApi.ts
-function ensureSharedUint8Array(arr) {
-  if (!arr) {
-    return new Uint8Array(0);
-  }
-  if (arr.byteOffset === 0 && arr.byteLength === arr.buffer.byteLength) {
-    return arr;
-  }
-  return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
-}
-var DataApi = class {
-  /**
-   * Encodes raw bytes into wire frames using WASM protocol core.
-   * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
-   */
-  static encodeBytes(data, qrVersion = 5, ecLevel = "m", parityMode = 0) {
-    const bytes = ensureSharedUint8Array(data);
-    const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
-    return protocol.encodeBytes(bytes, maxFrameBits, parityMode);
-  }
-  /**
-   * Encodes text into wire frames using WASM protocol core.
-   * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
-   */
-  static encodeText(text, qrVersion = 5, ecLevel = "m", parityMode = 0) {
-    const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
-    return protocol.encodeText(text, maxFrameBits, parityMode);
-  }
-  /**
-   * Parses a single wire frame and verifies its CRC.
-   */
-  static parseFrame(wireBytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode) {
-    const bytes = ensureSharedUint8Array(wireBytes);
-    return protocol.parseFrame(bytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode);
-  }
-  /**
-   * Decodes a complete list of wire frames and returns the payload along with its type.
-   * Returns { type: "Uint8Array" | "string", data: Uint8Array | string } according to Spec v8.
-   */
-  static decodeFrames(wireFrames) {
-    const sharedFrames = wireFrames.map(ensureSharedUint8Array);
-    const decoded = protocol.decodeFrames(sharedFrames);
-    if (decoded.tag === "bytes") {
-      return {
-        type: "Uint8Array",
-        data: decoded.val
-      };
-    }
-    if (decoded.tag === "text") {
-      return {
-        type: "string",
-        data: decoded.val
-      };
-    }
-    throw new Error("Unknown decoded payload tag");
-  }
-  /**
-   * Generates a binary QR module matrix using qrcodegen via WASM.
-   */
-  static generateQrMatrix(wireBytes, qrVersion, ecLevel) {
-    const bytes = ensureSharedUint8Array(wireBytes);
-    return protocol.generateQrMatrix(bytes, qrVersion, ecLevel);
-  }
-  /**
-   * Decodes QR code image pixels (RGBA) to wire bytes using rxing via WASM.
-   */
-  static decodeQrImage(rgbaPixels, width, height) {
-    const pixels = ensureSharedUint8Array(rgbaPixels);
-    return protocol.decodeQrImage(pixels, width, height);
-  }
-};
 
 // src/config/index.ts
 var ParityMode = /* @__PURE__ */ ((ParityMode3) => {
@@ -10657,9 +10379,9 @@ var BrowserRuntimeConfig = class _BrowserRuntimeConfig {
   facingMode;
   deviceId;
   constructor(options) {
-    this.renderFps = options?.renderFps ?? 10;
-    this.cameraFps = options?.cameraFps ?? 30;
-    this.decodeFrequency = options?.decodeFrequency ?? 10;
+    this.renderFps = options?.renderFps ?? 60;
+    this.cameraFps = options?.cameraFps ?? 60;
+    this.decodeFrequency = options?.decodeFrequency ?? 60;
     this.qrWidth = options?.qrWidth ?? 300;
     this.qrHeight = options?.qrHeight ?? 300;
     this.canvasWidth = options?.canvasWidth ?? 300;
@@ -10696,6 +10418,297 @@ var AppConfig = class _AppConfig {
       data: this.data.clone(),
       browserRuntime: this.browserRuntime.clone()
     });
+  }
+};
+
+// src/api/browserRuntimeApi.ts
+var BrowserRuntimeApi = class {
+  static HEADER_SIZE = 2;
+  static MAX_FILENAME_LENGTH = 65535;
+  config;
+  initialOptions;
+  cameraStream = null;
+  cameraVideo = null;
+  cameraAnimationId = null;
+  constructor(config) {
+    if (config instanceof BrowserRuntimeConfig) {
+      this.config = config;
+    } else {
+      this.initialOptions = config;
+      this.config = new BrowserRuntimeConfig(config);
+    }
+  }
+  static async packFileToUint8Array(file) {
+    const filenameEncoder = new TextEncoder();
+    const filename = filenameEncoder.encode(file.name);
+    if (filename.length > this.MAX_FILENAME_LENGTH) {
+      throw new RangeError(`The filename exceeds ${this.MAX_FILENAME_LENGTH} bytes.`);
+    }
+    const fileData = new Uint8Array(await file.arrayBuffer());
+    const result = new Uint8Array(this.HEADER_SIZE + filename.length + fileData.length);
+    new DataView(result.buffer).setUint16(0, filename.length, false);
+    result.set(filename, this.HEADER_SIZE);
+    result.set(fileData, this.HEADER_SIZE + filename.length);
+    return result;
+  }
+  static unpackUint8ArrayToFile(packed) {
+    if (packed.length < this.HEADER_SIZE) {
+      throw new RangeError("Data is too short to contain a valid header.");
+    }
+    const filenameLength = new DataView(packed.buffer, packed.byteOffset, this.HEADER_SIZE).getUint16(0, false);
+    if (filenameLength > packed.length - this.HEADER_SIZE) {
+      throw new RangeError("Filename length exceeds the available data.");
+    }
+    const filenameEnd = this.HEADER_SIZE + filenameLength;
+    const filenameDecoder = new TextDecoder("utf-8", { fatal: true });
+    const name = filenameDecoder.decode(packed.subarray(this.HEADER_SIZE, filenameEnd));
+    const data = packed.subarray(filenameEnd);
+    return { name, data };
+  }
+  resolveCanvas(canvasTarget) {
+    if (typeof document === "undefined") {
+      return null;
+    }
+    if (!canvasTarget) {
+      return document.querySelector("canvas");
+    }
+    if (typeof canvasTarget === "string") {
+      const el = document.getElementById(canvasTarget);
+      if (el && el instanceof HTMLCanvasElement) {
+        return el;
+      }
+      return document.querySelector(canvasTarget);
+    }
+    if (canvasTarget instanceof HTMLCanvasElement) {
+      return canvasTarget;
+    }
+    return null;
+  }
+  renderQrModuleMatrix(matrix, options) {
+    const canvas = this.resolveCanvas(options?.canvas);
+    if (!canvas) {
+      return;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return;
+    }
+    const canvasWidth = options?.width ?? this.config.canvasWidth ?? canvas.width ?? 300;
+    const canvasHeight = options?.height ?? this.config.canvasHeight ?? canvas.height ?? 300;
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const { width, height, modules } = matrix;
+    if (width <= 0 || height <= 0 || modules.length < width * height) {
+      return;
+    }
+    const darkColor = options?.darkColor ?? "#000000";
+    const lightColor = options?.lightColor ?? "#FFFFFF";
+    ctx.fillStyle = lightColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    ctx.imageSmoothingEnabled = false;
+    if ("mozImageSmoothingEnabled" in ctx) ctx.mozImageSmoothingEnabled = false;
+    if ("webkitImageSmoothingEnabled" in ctx) ctx.webkitImageSmoothingEnabled = false;
+    ctx.fillStyle = darkColor;
+    for (let y = 0; y < height; y++) {
+      const startY = Math.round(y * canvasHeight / height);
+      const endY = Math.round((y + 1) * canvasHeight / height);
+      const h = endY - startY;
+      for (let x = 0; x < width; x++) {
+        if (modules[y * width + x] === 1) {
+          const startX = Math.round(x * canvasWidth / width);
+          const endX = Math.round((x + 1) * canvasWidth / width);
+          const w = endX - startX;
+          ctx.fillRect(startX, startY, w, h);
+        }
+      }
+    }
+  }
+  clearCanvas(canvasTarget) {
+    const canvas = this.resolveCanvas(canvasTarget);
+    if (!canvas) {
+      return;
+    }
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+  async getAvailableVideoDevices() {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      return [];
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((device) => device.kind === "videoinput");
+  }
+  async startCamera(onFrame, options) {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("Camera API (navigator.mediaDevices.getUserMedia) is not available in this environment");
+    }
+    this.stopCamera();
+    const facingMode = options?.facingMode ?? this.config.facingMode;
+    const deviceId = options?.deviceId ?? this.config.deviceId;
+    const reqWidth = options?.width ?? this.config.canvasWidth;
+    const reqHeight = options?.height ?? this.config.canvasHeight;
+    const videoConstraints = {
+      width: reqWidth ? { ideal: reqWidth } : void 0,
+      height: reqHeight ? { ideal: reqHeight } : void 0
+    };
+    if (deviceId) {
+      videoConstraints.deviceId = { exact: deviceId };
+    } else if (facingMode) {
+      videoConstraints.facingMode = { ideal: facingMode };
+    }
+    const constraints = {
+      video: videoConstraints
+    };
+    this.cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+    if (options?.isManual ?? true) {
+      const track = this.cameraStream.getVideoTracks()[0];
+      if (track) {
+        try {
+          await track.applyConstraints({
+            focusMode: { ideal: "manual" },
+            exposureMode: { ideal: "manual" },
+            whiteBalanceMode: { ideal: "manual" }
+          });
+        } catch {
+        }
+      }
+    }
+    this.cameraVideo = document.createElement("video");
+    this.cameraVideo.srcObject = this.cameraStream;
+    this.cameraVideo.setAttribute("playsinline", "true");
+    await this.cameraVideo.play();
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const fps = options?.fps && options.fps > 0 ? options.fps : this.config.cameraFps > 0 ? this.config.cameraFps : 60;
+    const intervalMs = 1e3 / fps;
+    let lastFrameTime = 0;
+    const captureLoop = (now2) => {
+      if (!this.cameraVideo || !this.cameraStream) {
+        return;
+      }
+      if (now2 - lastFrameTime >= intervalMs) {
+        lastFrameTime = now2;
+        const vWidth = this.cameraVideo.videoWidth;
+        const vHeight = this.cameraVideo.videoHeight;
+        if (vWidth > 0 && vHeight > 0 && ctx) {
+          canvas.width = vWidth;
+          canvas.height = vHeight;
+          ctx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
+          const imgData = ctx.getImageData(0, 0, vWidth, vHeight);
+          if (options?.previewCanvas) {
+            const pCanvas = this.resolveCanvas(options.previewCanvas);
+            if (pCanvas) {
+              const pCtx = pCanvas.getContext("2d");
+              if (pCtx) {
+                if (pCanvas.width !== vWidth) pCanvas.width = vWidth;
+                if (pCanvas.height !== vHeight) pCanvas.height = vHeight;
+                pCtx.drawImage(this.cameraVideo, 0, 0, vWidth, vHeight);
+                if (options.drawOverlay) {
+                  options.drawOverlay(pCtx, vWidth, vHeight);
+                }
+              }
+            }
+          }
+          onFrame(new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength), vWidth, vHeight);
+        }
+      }
+      this.cameraAnimationId = requestAnimationFrame(captureLoop);
+    };
+    this.cameraAnimationId = requestAnimationFrame(captureLoop);
+  }
+  stopCamera() {
+    if (this.cameraAnimationId !== null && typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(this.cameraAnimationId);
+      this.cameraAnimationId = null;
+    }
+    if (this.cameraStream) {
+      for (const track of this.cameraStream.getTracks()) {
+        track.stop();
+      }
+      this.cameraStream = null;
+    }
+    if (this.cameraVideo) {
+      this.cameraVideo.pause();
+      this.cameraVideo.srcObject = null;
+      this.cameraVideo = null;
+    }
+  }
+  isWorkerSupported() {
+    return typeof Worker !== "undefined";
+  }
+};
+
+// src/api/dataApi.ts
+function ensureSharedUint8Array(arr) {
+  if (!arr) {
+    return new Uint8Array(0);
+  }
+  if (arr.byteOffset === 0 && arr.byteLength === arr.buffer.byteLength) {
+    return arr;
+  }
+  return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+var DataApi = class {
+  /**
+   * Encodes raw bytes into wire frames using WASM protocol core.
+   * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
+   */
+  static encodeBytes(data, qrVersion = 5, ecLevel = "m", parityMode = 0) {
+    const bytes = ensureSharedUint8Array(data);
+    const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
+    return protocol.encodeBytes(bytes, maxFrameBits, parityMode);
+  }
+  /**
+   * Encodes text into wire frames using WASM protocol core.
+   * Automatically calculates maxFrameBits from qrVersion and ecLevel if qrVersion <= 40.
+   */
+  static encodeText(text, qrVersion = 5, ecLevel = "m", parityMode = 0) {
+    const maxFrameBits = qrVersion > 40 ? qrVersion : calculateMaxFrameBits(qrVersion, ecLevel);
+    return protocol.encodeText(text, maxFrameBits, parityMode);
+  }
+  /**
+   * Parses a single wire frame and verifies its CRC.
+   */
+  static parseFrame(wireBytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode) {
+    const bytes = ensureSharedUint8Array(wireBytes);
+    return protocol.parseFrame(bytes, knownTotalQrCount, knownFirstFrameCrc, knownParityMode);
+  }
+  /**
+   * Decodes a complete list of wire frames and returns the payload along with its type.
+   * Returns { type: "Uint8Array" | "string", data: Uint8Array | string } according to Spec v8.
+   */
+  static decodeFrames(wireFrames) {
+    const sharedFrames = wireFrames.map(ensureSharedUint8Array);
+    const decoded = protocol.decodeFrames(sharedFrames);
+    if (decoded.tag === "bytes") {
+      return {
+        type: "Uint8Array",
+        data: decoded.val
+      };
+    }
+    if (decoded.tag === "text") {
+      return {
+        type: "string",
+        data: decoded.val
+      };
+    }
+    throw new Error("Unknown decoded payload tag");
+  }
+  /**
+   * Generates a binary QR module matrix using qrcodegen via WASM.
+   */
+  static generateQrMatrix(wireBytes, qrVersion, ecLevel) {
+    const bytes = ensureSharedUint8Array(wireBytes);
+    return protocol.generateQrMatrix(bytes, qrVersion, ecLevel);
+  }
+  /**
+   * Decodes QR code image pixels (RGBA) to wire bytes using rxing via WASM.
+   */
+  static decodeQrImage(rgbaPixels, width, height) {
+    const pixels = ensureSharedUint8Array(rgbaPixels);
+    return protocol.decodeQrImage(pixels, width, height);
   }
 };
 
@@ -11202,10 +11215,20 @@ var TransportApi = class {
   lastQrDetected = false;
   constructor(config, runtime) {
     this.config = config ? config.clone() : new AppConfig();
-    this.runtime = runtime;
+    this.setRuntime(runtime);
   }
   setRuntime(runtime) {
     this.runtime = runtime;
+    if (this.runtime && this.runtime instanceof BrowserRuntimeApi) {
+      if (this.runtime.initialOptions) {
+        this.runtime.config = new BrowserRuntimeConfig({
+          ...this.config.browserRuntime,
+          ...this.runtime.initialOptions
+        });
+      } else {
+        this.runtime.config = this.config.browserRuntime;
+      }
+    }
   }
   getConfig() {
     return this.config;
@@ -11812,7 +11835,7 @@ var TransportApi = class {
 };
 
 // src/config/version.ts
-var VERSION = "0.3.5";
+var VERSION = "0.4.0";
 export {
   AppConfig,
   BrowserRuntimeApi,

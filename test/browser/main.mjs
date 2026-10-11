@@ -46,7 +46,7 @@ const panelReceiver = document.getElementById("panel-receiver");
 
 const config = new AppConfig({});
 
-const runtime = new BrowserRuntimeApi();
+const runtime = new BrowserRuntimeApi(config.browserRuntime);
 const transport = new TransportApi(config, runtime);
 
 // テストページでコンソールからユーザーが触れるように設定
@@ -381,7 +381,6 @@ btnStartReceive.addEventListener("click", async () => {
 			},
 			{
 				previewCanvas: "camera-canvas",
-				fps: 60,
 				facingMode,
 				deviceId,
 				drawOverlay: drawCameraOverlay,
