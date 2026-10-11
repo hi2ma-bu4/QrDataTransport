@@ -27,17 +27,41 @@ QRコードを連続表示して、文字列やバイナリデータを高速送
 
 ## 通信速度
 
-- **理論上の最大通信速度**：`1.41 Mbps` (約 177.2 KB/s)
-  - **算出条件**：QR Version 40 / EC Level L（1フレームあたりの純ペイロード容量: 23,628 bits）を 60 fps（約 16.6 ms 間隔）で連続送信した場合。
-  - 100 ms 間隔（10 fps）送信時の理論最大速度は約 `236 kbps` (約 29.5 KB/s) です。
-
-- **観測史上最速（実測値）**：`127 kbps`
-  - **観測環境**：
-    - `qrVersion`: 35
+- **理論上の最大通信速度**：`1,414 kbps` (約 176.84 KB/s)
+  - **算出条件**：
+    - `qrVersion`: 40
     - `ecLevel`: L
-    - `intervalMs`: 70 ms
-    - `parityMode`: 8
+    - `intervalMs`: **16.6 ms** (約 60fps)
+    - `parityMode`: **0**
     - `cameraFps`: 60
+
+    ※1フレームを23,578bitとして計算
+
+- **カメラ経由・パリティなし最速値（実測値）**：`1216 kbps` (152 KB/s)
+  - **観測環境**：
+    - `qrVersion`: 40
+    - `ecLevel`: L
+    - `intervalMs`: **16.6 ms** (約 60fps)
+    - `parityMode`: **0**
+    - `cameraFps`: 60
+
+- **カメラ経由なしパリティあり最速値（実測値）**：`291 kbps` (約 36.37 KB/s)
+  - **観測環境**：
+    - `qrVersion`: 40
+    - `ecLevel`: L
+    - `intervalMs`: **80 ms** (約 12.5fps)
+    - `parityMode`: **8**
+    - `cameraFps`: 60
+
+- **観測史上最速（実測値）**：`179 kbps` (22.38 KB/s)
+  - **観測環境**：
+    - `qrVersion`: 40
+    - `ecLevel`: L
+    - `intervalMs`: **80 ms** (約 12.5fps)
+    - `parityMode`: **8**
+    - `cameraFps`: 60
+
+  > `カメラ経由なしパリティあり最速値`の 約 61.5% (約 38.5%低速)
 
 ## インストール
 
